@@ -1,5 +1,6 @@
 import math
 import re
+import fnmatch
 from typing import List, Any, Callable
 import logging
 from functools import partial
@@ -18,10 +19,7 @@ def regex_match(regex_keys, x):
 def regex_filter(regex_keys, xs):
     return list(filter(lambda x: regex_match(regex_keys, x), xs))
 
-def freeze_weights_pt(
-    module: nn.Module,
-    frozen_keys: List[str]
-):
+def freeze_weights_pt(module: nn.Module, frozen_keys: List[str], *, strict: bool = True):
     """
     Freezes all weights in params_or_params_shape whose keys fnmatch the ones in frozen_keys.
     Example usage:
@@ -30,14 +28,25 @@ def freeze_weights_pt(
     logging.info(f"Freezing parameters that include the following keys: {frozen_keys}.")
     
     param_names = [name for name, _ in module.named_parameters()]
-    frozen_keys = ['.' + key for key in frozen_keys] # TODO
-    selected_params = regex_filter(frozen_keys, param_names)
+    # Config patterns historically used JAX-style ``foo.*``.  Match those
+    # against the actual PyTorch names using glob semantics (and retain a
+    # regex fallback for callers that pass an explicit regex).
+    def _matches(name, pattern):
+        if fnmatch.fnmatchcase(name, pattern):
+            return True
+        try:
+            return re.match(pattern, name) is not None
+        except re.error:
+            return False
+    selected_params = [name for name in param_names if any(_matches(name, p) for p in frozen_keys)]
+    if strict and frozen_keys and not selected_params:
+        raise ValueError(f"freeze rule matched 0 parameters: {frozen_keys}; available examples: {param_names[:8]}")
     
     for p_name, p in module.named_parameters():
         if p_name in selected_params:
             p.requires_grad = False
         
-    logging.debug("Frozen params:", selected_params)
+    logging.debug("Frozen params: %s", selected_params)
     total_params = sum([p.numel() for p in module.parameters()])
     trainable_params = sum([p.numel() for p in module.parameters() if p.requires_grad==True])
     frozen_params = sum([p.numel() for p in module.parameters() if p.requires_grad==False])
@@ -45,6 +54,28 @@ def freeze_weights_pt(
     logging.info(f"Num trainable params: {trainable_params:,}.")
     logging.info(f"Num frozen params: {total_params - trainable_params:,}.")
     logging.info("To see a detailed list of frozen params, set logging level to DEBUG.")
+    return {"rules": list(frozen_keys), "matched": selected_params,
+            "trainable_params": trainable_params, "frozen_params": frozen_params}
+
+
+def parameter_groups_pt(module: nn.Module, group_lrs: dict, *, default_lr: float,
+                        weight_decay: float = 0.0):
+    """Build deterministic AdamW groups from stable name prefixes.
+
+    ``group_lrs`` maps glob patterns (e.g. ``action_head`` or
+    ``octo_transformer.block_transformer.transformer.encoder_blocks.8.*``)
+    to learning rates. Every trainable parameter is assigned once; unmatched
+    parameters use ``default_lr``.
+    """
+    groups = {k: {"params": [], "lr": float(v), "weight_decay": weight_decay}
+              for k, v in group_lrs.items()}
+    groups["default"] = {"params": [], "lr": float(default_lr), "weight_decay": weight_decay}
+    for name, param in module.named_parameters():
+        if not param.requires_grad:
+            continue
+        key = next((k for k in group_lrs if fnmatch.fnmatchcase(name, k) or k in name), "default")
+        groups[key]["params"].append(param)
+    return [g for g in groups.values() if g["params"]]
 
 def _flatten_dict(d,  sep: str ='.', parent_key: str = ''):
     items = {}

@@ -40,6 +40,7 @@ from octo.utils.train_utils_pt import (
     _jax_config_to_pt_config,
     _np2pt,
     freeze_weights_pt,
+    parameter_groups_pt,
     tree_map,
     get_cosine_schedule_with_warmup,
     _flatten_dict
@@ -243,9 +244,17 @@ def main(_):
 
     if FLAGS.config.optimizer.frozen_keys is None:
         FLAGS.config.optimizer.frozen_keys = meta['config']["optimizer"]["frozen_keys"]
-    freeze_weights_pt(model, FLAGS.config.optimizer.frozen_keys)
+    freeze_report = freeze_weights_pt(model, FLAGS.config.optimizer.frozen_keys)
     
-    trainable_params = [param for param in model.parameters() if param.requires_grad]
+    group_lrs = FLAGS.config.optimizer.get("parameter_groups", {})
+    if group_lrs:
+        trainable_params = parameter_groups_pt(
+            model, group_lrs,
+            default_lr=meta['config']["optimizer"]["learning_rate"]["peak_value"],
+            weight_decay=meta['config']["optimizer"].get("weight_decay", 0.0),
+        )
+    else:
+        trainable_params = [param for param in model.parameters() if param.requires_grad]
     optimizer = AdamW(trainable_params, lr=meta['config']["optimizer"]["learning_rate"]["peak_value"])
     lr_sheduler = get_cosine_schedule_with_warmup(
         optimizer,
