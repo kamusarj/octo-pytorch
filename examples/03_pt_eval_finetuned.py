@@ -13,7 +13,6 @@ from functools import partial
 
 from absl import app, flags, logging
 import gym
-import jax
 import numpy as np
 import wandb
 
@@ -24,7 +23,6 @@ from envs.aloha_sim_env import AlohaGymEnv  # noqa
 
 from octo.model.octo_model_pt import OctoModelPt
 from octo.utils.gym_wrappers import HistoryWrapper, NormalizeProprio, RHCWrapper
-from octo.utils.train_callbacks import supply_rng
 from octo.utils.train_utils_pt import tree_map, _np2pt
 
 FLAGS = flags.FLAGS
@@ -32,12 +30,23 @@ FLAGS = flags.FLAGS
 flags.DEFINE_string(
     "finetuned_path", None, "Path to finetuned Octo checkpoint directory."
 )
+flags.DEFINE_integer(
+    "exec_horizon",
+    4,
+    "Number of actions to execute from each predicted 20-action chunk.",
+)
+flags.DEFINE_integer("max_steps", 160, "Maximum environment steps per rollout.")
+flags.DEFINE_integer("num_rollouts", 3, "Number of evaluation rollouts.")
 
 
 def main(_):
     # setup wandb for logging
     wandb.init(name="eval_aloha_pt", project="octo")
-    device = 'cuda:0'
+    if not FLAGS.finetuned_path:
+        raise ValueError("--finetuned_path is required")
+    if not 1 <= FLAGS.exec_horizon <= 20:
+        raise ValueError("--exec_horizon must be between 1 and 20")
+    device = "cuda:0" if torch.cuda.is_available() else "cpu"
 
     # load finetuned model
     logging.info("Loading finetuned model...")
@@ -58,14 +67,16 @@ def main(_):
     #     }
     #   }
     ##################################################################################################################
-    env = gym.make("aloha-carrot-left-v0")
+    # This environment consumes the fine-tuning action contract directly:
+    # six absolute left-arm joints and one follower-gripper value.
+    env = gym.make("aloha-carrot-left-policy-v0")
 
     # wrap env to normalize proprio
     env = NormalizeProprio(env, model.dataset_statistics)
 
     # add wrappers for history and "receding horizon control", i.e. action chunking
     env = HistoryWrapper(env, horizon=1)
-    env = RHCWrapper(env, exec_horizon=50)
+    env = RHCWrapper(env, exec_horizon=FLAGS.exec_horizon)
 
     policy_fn = partial(
         model.sample_actions,
@@ -74,7 +85,7 @@ def main(_):
     )
 
     # running rollouts
-    for _ in range(3):
+    for _ in range(FLAGS.num_rollouts):
         obs, info = env.reset()
 
         # create task specification --> use model utility to create task dict with correct entries
@@ -84,14 +95,14 @@ def main(_):
         # run rollout for 400 steps
         images = [obs["image_primary"][0]]
         episode_return = 0.0
-        while len(images) < 400:
+        while len(images) < FLAGS.max_steps:
             
             obs['timestep_pad_mask'] = obs['timestep_pad_mask'].astype(np.bool_)
             obs = _np2pt(obs, device)
             
             # model returns actions of shape [batch, pred_horizon, action_dim] -- remove batch
             actions = policy_fn(tree_map(lambda x: x[None], obs), task)
-            actions = actions[0]
+            actions = actions[0].detach().cpu().numpy()
 
             # step env -- info contains full "chunk" of observations for logging
             # obs only contains observation for final step of chunk
@@ -106,6 +117,7 @@ def main(_):
         wandb.log(
             {"rollout_video": wandb.Video(np.array(images).transpose(0, 3, 1, 2)[::2])}
         )
+    env.close()
 
 
 if __name__ == "__main__":

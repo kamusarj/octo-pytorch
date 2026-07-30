@@ -109,6 +109,33 @@ SOURCE_EE_POS = (
 
 FOLLOWER_GRIPPER_OPEN = 1.63062167
 FOLLOWER_GRIPPER_CLOSE = 1.18883514
+DATASET_GRIPPER_ACTION_LOW = 1.13
+DATASET_GRIPPER_ACTION_HIGH = 1.66
+
+LEFT_ARM_ACTION_LOW = np.array(
+    [
+        -3.14158,
+        -1.85005,
+        -1.76278,
+        -3.14158,
+        -1.8675,
+        -3.14158,
+        DATASET_GRIPPER_ACTION_LOW,
+    ],
+    dtype=np.float64,
+)
+LEFT_ARM_ACTION_HIGH = np.array(
+    [
+        3.14158,
+        1.25664,
+        1.6057,
+        3.14158,
+        2.23402,
+        3.14158,
+        DATASET_GRIPPER_ACTION_HIGH,
+    ],
+    dtype=np.float64,
+)
 
 SIM_GRIPPER_QPOS_OPEN = 0.037
 SIM_GRIPPER_QPOS_CLOSE = 0.0078
@@ -495,6 +522,39 @@ class AlohaCarrotLeftSim:
         else:
             gripper = float(command.gripper)
 
+        left_qpos = self._qpos_from_ee(ee_pos, gripper)
+        return self._advance(ee_pos, left_qpos, gripper)
+
+    def step_joint_action(
+        self,
+        action: Sequence[float],
+        *,
+        ee_pos: Sequence[float],
+    ) -> SceneState:
+        """Advance using the dataset action contract: six joints plus gripper."""
+
+        action_array = np.asarray(action, dtype=np.float64)
+        if action_array.shape != (7,):
+            raise ValueError(
+                f"Joint ALOHA carrot actions must have shape (7,), "
+                f"got {action_array.shape}"
+            )
+        clipped = np.clip(action_array, LEFT_ARM_ACTION_LOW, LEFT_ARM_ACTION_HIGH)
+        ee_array = np.asarray(ee_pos, dtype=np.float64)
+        if ee_array.shape != (3,):
+            raise ValueError(
+                f"Forward-kinematics position must have shape (3,), "
+                f"got {ee_array.shape}"
+            )
+        return self._advance(ee_array, clipped, float(clipped[6]))
+
+    def _advance(
+        self,
+        ee_pos: np.ndarray,
+        left_qpos: np.ndarray,
+        gripper: float,
+    ) -> SceneState:
+        state = self._state
         object_phase = state.object_phase
         carrot_pos = state.carrot_pos.copy()
         carrot_quat = state.carrot_quat.copy()
@@ -512,7 +572,7 @@ class AlohaCarrotLeftSim:
         if object_phase == "held":
             carrot_pos = ee_pos + self._hold_offset
             cup_xy_distance = float(np.linalg.norm(carrot_pos[:2] - state.cup_pos[:2]))
-            low_over_cup = carrot_pos[2] < state.cup_pos[2] + 0.06
+            low_over_cup = carrot_pos[2] < state.cup_pos[2] + 0.13
             if (
                 gripper_open_fraction(gripper) > 0.62
                 and cup_xy_distance < 0.05
@@ -528,8 +588,8 @@ class AlohaCarrotLeftSim:
         success = object_phase == "in_cup"
         self._state = SceneState(
             step_index=state.step_index + 1,
-            ee_pos=ee_pos,
-            left_qpos=self._qpos_from_ee(ee_pos, gripper),
+            ee_pos=np.asarray(ee_pos, dtype=np.float64).copy(),
+            left_qpos=np.asarray(left_qpos, dtype=np.float64).copy(),
             gripper=gripper,
             carrot_pos=carrot_pos,
             carrot_quat=carrot_quat,
@@ -623,7 +683,9 @@ class AlohaCarrotLeftSim:
             self._draw_wrist_carrot_close(
                 draw,
                 held=True,
-                over_cup=state.carrot_pos[0] < -0.05,
+                over_cup=bool(
+                    np.linalg.norm(state.carrot_pos[:2] - state.cup_pos[:2]) < 0.12
+                ),
             )
         elif state.object_phase == "in_cup" and distance_to_cup < 0.16:
             self._draw_wrist_place_close(draw)

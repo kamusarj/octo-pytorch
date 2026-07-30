@@ -363,10 +363,10 @@ class AlohaCarrotLeftSimTest(unittest.TestCase):
 
         env = gym.make("aloha-carrot-left-v0")
         obs, info = env.reset()
-        self.assertEqual(env.action_space.shape, (4,))
+        self.assertEqual(env.action_space.shape, (7,))
         self.assertEqual(obs["proprio"].shape, (7,))
         self.assertEqual(obs["image_primary"].shape, (256, 256, 3))
-        self.assertEqual(obs["image_wrist"].shape, (256, 256, 3))
+        self.assertEqual(obs["image_wrist"].shape, (128, 128, 3))
         self.assertTrue(info["left_arm_only"])
         self.assertFalse(info["right_arm_present"])
         self.assertEqual(
@@ -385,6 +385,86 @@ class AlohaCarrotLeftSimTest(unittest.TestCase):
         self.assertGreaterEqual(total_reward, 4.0)
         self.assertEqual(info["object_phase"], "in_cup")
         self.assertTrue(env.unwrapped.get_episode_metrics()["success_rate"])
+        env.close()
+
+    def test_policy_gym_env_consumes_absolute_7d_action(self):
+        try:
+            import gym
+            from examples.envs.aloha_sim_env import AlohaGymEnv  # noqa
+        except ModuleNotFoundError as exc:
+            self.skipTest(f"Gym unavailable: {exc}")
+
+        env = gym.make("aloha-carrot-left-policy-v0")
+        obs, _ = env.reset()
+        action = np.asarray(self.config.left_home_qpos, dtype=np.float32)
+        next_obs, _, done, truncated, info = env.step(action)
+
+        np.testing.assert_allclose(next_obs["proprio"], action, atol=1e-6)
+        self.assertEqual(info["object_phase"], "on_plate")
+        self.assertFalse(done)
+        self.assertFalse(truncated)
+        self.assertEqual(env.unwrapped._controller.stage, 0)
+        with self.assertRaises(ValueError):
+            env.step(np.zeros(4, dtype=np.float32))
+        env.close()
+
+    def test_policy_action_space_covers_dataset_gripper_range(self):
+        try:
+            import gym
+            from examples.envs.aloha_sim_env import AlohaGymEnv  # noqa
+        except ModuleNotFoundError as exc:
+            self.skipTest(f"Gym unavailable: {exc}")
+
+        env = gym.make("aloha-carrot-left-policy-v0")
+        self.assertLessEqual(float(env.action_space.low[6]), 1.13821375)
+        self.assertGreaterEqual(float(env.action_space.high[6]), 1.65363133)
+        env.close()
+
+    def test_policy_env_replays_episode_zero_to_success(self):
+        try:
+            import gym
+            import pyarrow.parquet as pq
+            from examples.envs.aloha_sim_env import AlohaGymEnv  # noqa
+        except ModuleNotFoundError as exc:
+            self.skipTest(f"Gym/dataset dependency unavailable: {exc}")
+
+        episode_path = Path(
+            "data/aloha_carrot_easy/data/chunk-000/episode_000000.parquet"
+        )
+        if not episode_path.is_file():
+            self.skipTest(f"Local dataset unavailable: {episode_path}")
+        actions = np.asarray(
+            pq.read_table(episode_path, columns=["action"])["action"].to_pylist(),
+            dtype=np.float32,
+        )
+        env = gym.make(
+            "aloha-carrot-left-policy-v0",
+            max_episode_steps=len(actions),
+        )
+        env.reset()
+        phases = []
+        for action in actions:
+            obs, _, done, truncated, info = env.step(action)
+            phases.append(info["object_phase"])
+            if done or truncated:
+                break
+
+        self.assertTrue(done)
+        self.assertFalse(truncated)
+        self.assertEqual(phases[-1], "in_cup")
+        self.assertIn("held", phases)
+        np.testing.assert_allclose(obs["proprio"], actions[len(phases) - 1])
+        env.close()
+
+    def test_manual_gym_env_preserves_cartesian_action_contract(self):
+        try:
+            import gym
+            from examples.envs.aloha_sim_env import AlohaGymEnv  # noqa
+        except ModuleNotFoundError as exc:
+            self.skipTest(f"Gym unavailable: {exc}")
+
+        env = gym.make("aloha-carrot-left-manual-v0")
+        self.assertEqual(env.action_space.shape, (4,))
         env.close()
 
 

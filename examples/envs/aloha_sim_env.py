@@ -23,6 +23,8 @@ from octo.sim.aloha_carrot_left import AlohaCarrotLeftSim
 from octo.sim.aloha_carrot_left import DatasetAlignedController
 from octo.sim.aloha_carrot_left import FOLLOWER_GRIPPER_CLOSE
 from octo.sim.aloha_carrot_left import FOLLOWER_GRIPPER_OPEN
+from octo.sim.aloha_carrot_left import LEFT_ARM_ACTION_HIGH
+from octo.sim.aloha_carrot_left import LEFT_ARM_ACTION_LOW
 from octo.sim.aloha_carrot_left import LeftArmCommand
 
 _DEFAULT_IMAGE_KEYS = ("primary", "wrist")
@@ -35,10 +37,9 @@ _CAMERA_TO_OBS_KEY = {
 class AlohaGymEnv(gym.Env if gym is not None else object):
     """Single-left-arm carrot pick-and-place environment.
 
-    By default the environment uses the deterministic dataset-aligned controller
-    so the left arm autonomously navigates to the carrot and places it in the
-    cup. Set ``autonomous=False`` to drive the task with 4D actions:
-    ``[target_x, target_y, target_z, follower_gripper]``.
+    ``action_mode="scripted"`` is the deterministic baseline. Policy evaluation
+    uses ``action_mode="joint"`` with the exact fine-tuning contract:
+    ``[six absolute joint positions, follower_gripper]``.
     """
 
     metadata = {"render_modes": ["rgb_array"], "render_fps": 12}
@@ -46,9 +47,10 @@ class AlohaGymEnv(gym.Env if gym is not None else object):
     def __init__(
         self,
         camera_names: Optional[Sequence[str]] = None,
-        im_size: int = 256,
+        im_size: Optional[int] = None,
         seed: int = 42,
         autonomous: bool = True,
+        action_mode: Optional[str] = None,
         max_episode_steps: int = 160,
         config: Optional[AlohaCarrotLeftConfig] = None,
     ):
@@ -57,21 +59,39 @@ class AlohaGymEnv(gym.Env if gym is not None else object):
 
         self.config = config or AlohaCarrotLeftConfig.from_json()
         self.camera_names = tuple(camera_names or self.config.camera_names)
-        self._im_size = int(im_size)
+        self._image_sizes = {
+            "overhead_cam": (
+                (int(im_size), int(im_size))
+                if im_size is not None
+                else tuple(self.config.policy_image_size)
+            ),
+            "wrist_cam_left": (
+                (int(im_size), int(im_size))
+                if im_size is not None
+                else tuple(self.config.wrist_image_size)
+            ),
+        }
         self._rng = np.random.default_rng(seed)
-        self._autonomous = bool(autonomous)
+        self._action_mode = action_mode or (
+            "scripted" if autonomous else "cartesian"
+        )
+        if self._action_mode not in {"scripted", "joint", "cartesian"}:
+            raise ValueError(f"Unsupported ALOHA action mode: {self._action_mode}")
+        self._autonomous = self._action_mode == "scripted"
         self._max_episode_steps = int(max_episode_steps)
         self._sim = AlohaCarrotLeftSim(self.config, seed=seed)
         self._controller = DatasetAlignedController(self.config)
+        self._kinematics = None
         self._episode_is_success = 0
 
         image_spaces = {}
         for camera_name in self.camera_names:
             key = _CAMERA_TO_OBS_KEY[camera_name]
+            width, height = self._image_sizes[camera_name]
             image_spaces[key] = gym.spaces.Box(
                 low=0,
                 high=255,
-                shape=(self._im_size, self._im_size, 3),
+                shape=(height, width, 3),
                 dtype=np.uint8,
             )
 
@@ -86,15 +106,21 @@ class AlohaGymEnv(gym.Env if gym is not None else object):
                 ),
             }
         )
-        self.action_space = gym.spaces.Box(
-            low=np.array(
+        if self._action_mode == "cartesian":
+            action_low = np.array(
                 [-0.55, -0.05, 0.02, FOLLOWER_GRIPPER_CLOSE],
                 dtype=np.float32,
-            ),
-            high=np.array(
+            )
+            action_high = np.array(
                 [0.25, 0.45, 0.40, FOLLOWER_GRIPPER_OPEN],
                 dtype=np.float32,
-            ),
+            )
+        else:
+            action_low = LEFT_ARM_ACTION_LOW.astype(np.float32)
+            action_high = LEFT_ARM_ACTION_HIGH.astype(np.float32)
+        self.action_space = gym.spaces.Box(
+            low=action_low,
+            high=action_high,
             dtype=np.float32,
         )
 
@@ -116,8 +142,15 @@ class AlohaGymEnv(gym.Env if gym is not None else object):
         return obs, info
 
     def step(self, action):
-        command = self._select_command(action)
-        state = self._sim.step(command)
+        if self._action_mode == "joint":
+            joint_action = self._select_joint_action(action)
+            state = self._sim.step_joint_action(
+                joint_action,
+                ee_pos=self._forward_kinematics(joint_action),
+            )
+        else:
+            command = self._select_cartesian_command(action)
+            state = self._sim.step(command)
         obs, raw_images = self._get_obs()
         reward = float(state.reward)
         if self._autonomous:
@@ -141,6 +174,9 @@ class AlohaGymEnv(gym.Env if gym is not None else object):
         return self._sim.render_primary(self._sim.state)
 
     def close(self):
+        if self._kinematics is not None:
+            self._kinematics.close()
+            self._kinematics = None
         return None
 
     def get_task(self):
@@ -155,34 +191,65 @@ class AlohaGymEnv(gym.Env if gym is not None else object):
             "right_arm_present": False,
         }
 
-    def _select_command(self, action) -> LeftArmCommand:
-        if self._autonomous or action is None:
+    def _select_cartesian_command(self, action) -> LeftArmCommand:
+        if self._action_mode == "scripted":
             return self._controller.command(self._sim.state)
+        if action is None:
+            raise ValueError("Cartesian ALOHA carrot action cannot be None")
         array = np.asarray(action, dtype=np.float64).reshape(-1)
-        if len(array) < 4:
-            raise ValueError("Manual ALOHA carrot actions must have at least 4 values")
+        if array.shape != (4,):
+            raise ValueError(
+                f"Cartesian ALOHA carrot actions must have shape (4,), "
+                f"got {array.shape}"
+            )
         low = self.action_space.low.astype(np.float64)
         high = self.action_space.high.astype(np.float64)
-        clipped = np.clip(array[:4], low, high)
+        clipped = np.clip(array, low, high)
         return LeftArmCommand(
             ee_target=(float(clipped[0]), float(clipped[1]), float(clipped[2])),
             gripper=float(clipped[3]),
             speed=0.032,
         )
 
+    def _select_joint_action(self, action) -> np.ndarray:
+        array = np.asarray(action, dtype=np.float64)
+        if array.shape != (7,):
+            raise ValueError(
+                f"Policy ALOHA carrot actions must have shape (7,), "
+                f"got {array.shape}"
+            )
+        return np.clip(
+            array,
+            self.action_space.low.astype(np.float64),
+            self.action_space.high.astype(np.float64),
+        )
+
+    def _forward_kinematics(self, action: np.ndarray) -> np.ndarray:
+        if self._kinematics is None:
+            from octo.sim.aloha_carrot_mujoco import AlohaLeftArmForwardKinematics
+
+            self._kinematics = AlohaLeftArmForwardKinematics(self.config)
+        return self._kinematics.forward(action)
+
     def _get_obs(self) -> Tuple[Dict[str, np.ndarray], Dict[str, np.ndarray]]:
         raw_images = self._sim.get_observation(render=True)["images"]
         obs: Dict[str, np.ndarray] = {}
         for camera_name in self.camera_names:
             key = _CAMERA_TO_OBS_KEY[camera_name]
-            obs[key] = _resize_uint8(raw_images[camera_name], self._im_size)
+            obs[key] = _resize_uint8(
+                raw_images[camera_name],
+                self._image_sizes[camera_name],
+            )
         obs["proprio"] = self._sim.state.left_qpos.astype(np.float32)
         return obs, raw_images
 
 
-def _resize_uint8(image: np.ndarray, size: int) -> np.ndarray:
+def _resize_uint8(
+    image: np.ndarray,
+    size: Tuple[int, int],
+) -> np.ndarray:
     resized = Image.fromarray(np.asarray(image, dtype=np.uint8)).resize(
-        (size, size),
+        size,
         Image.Resampling.BILINEAR,
     )
     return np.asarray(resized, dtype=np.uint8)
@@ -207,4 +274,13 @@ def _register_env(env_id: str, **kwargs: Any) -> None:
 
 
 _register_env("aloha-carrot-left-v0", autonomous=True)
-_register_env("aloha-carrot-left-manual-v0", autonomous=False)
+_register_env(
+    "aloha-carrot-left-policy-v0",
+    autonomous=False,
+    action_mode="joint",
+)
+_register_env(
+    "aloha-carrot-left-manual-v0",
+    autonomous=False,
+    action_mode="cartesian",
+)

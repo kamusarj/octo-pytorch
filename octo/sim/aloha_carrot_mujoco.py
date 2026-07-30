@@ -6,6 +6,7 @@ import dataclasses
 import json
 import os
 import shutil
+import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
@@ -37,6 +38,16 @@ _LEFT_JOINT_NAMES = (
 )
 _LEFT_FINGER_JOINT = "vx300s_left/left_finger"
 _RIGHT_FINGER_JOINT = "vx300s_left/right_finger"
+_LEFT_POLICY_GRASP_SITE = "left_grasp_site"
+_LEFT_RENDER_SITE = "left_cam_focus"
+_POLICY_FK_ROTATION = np.array(
+    [
+        [0.38978056, -0.92090777],
+        [0.92090777, 0.38978056],
+    ],
+    dtype=np.float64,
+)
+_POLICY_FK_TRANSLATION = np.array([0.28638846, 0.16980796], dtype=np.float64)
 
 
 def follower_gripper_to_act_finger(follower_value: float) -> Tuple[float, float]:
@@ -45,6 +56,53 @@ def follower_gripper_to_act_finger(follower_value: float) -> Tuple[float, float]
     fraction = gripper_open_fraction(follower_value)
     left = 0.021 + fraction * (0.057 - 0.021)
     return float(left), float(-left)
+
+
+class AlohaLeftArmForwardKinematics:
+    """MuJoCo FK for absolute ALOHA actions shaped ``[qpos(6), gripper]``."""
+
+    def __init__(
+        self,
+        config: Optional[AlohaCarrotLeftConfig] = None,
+        *,
+        act_asset_root: Optional[Path | str] = None,
+    ):
+        self.config = config or AlohaCarrotLeftConfig()
+        self._tempdir = tempfile.TemporaryDirectory(prefix="octo_aloha_fk_")
+        scene = AlohaCarrotMujocoSmoke(
+            self.config,
+            act_asset_root=act_asset_root,
+        )
+        self._physics = scene.make_physics(self._tempdir.name)
+        scene.apply_reset(self._physics)
+        self._site_id = self._physics.model.name2id(_LEFT_POLICY_GRASP_SITE, "site")
+
+    def forward(self, action: Sequence[float]) -> np.ndarray:
+        action_array = np.asarray(action, dtype=np.float64)
+        if action_array.shape != (7,):
+            raise ValueError(
+                f"ALOHA FK expects action shape (7,), got {action_array.shape}"
+            )
+        for joint_name, value in zip(_LEFT_JOINT_NAMES, action_array[:6]):
+            _set_joint_qpos(self._physics, joint_name, float(value))
+        left_finger, right_finger = follower_gripper_to_act_finger(action_array[6])
+        _set_joint_qpos(self._physics, _LEFT_FINGER_JOINT, left_finger)
+        _set_joint_qpos(self._physics, _RIGHT_FINGER_JOINT, right_finger)
+        self._physics.data.qvel[:] = 0.0
+        self._physics.forward()
+        native_position = np.asarray(
+            self._physics.data.site_xpos[self._site_id],
+            dtype=np.float64,
+        ).copy()
+        native_position[:2] = (
+            _POLICY_FK_ROTATION @ native_position[:2] + _POLICY_FK_TRANSLATION
+        )
+        return native_position
+
+    def close(self) -> None:
+        if self._tempdir is not None:
+            self._tempdir.cleanup()
+            self._tempdir = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -189,7 +247,7 @@ class AlohaCarrotMujocoSmoke:
         carrot_after = self._body_xpos(physics, "carrot_body").copy()
 
         body_names = tuple(self._body_names(physics))
-        initial_ee_pos = self._site_xpos(physics, "left_cam_focus")
+        initial_ee_pos = self._site_xpos(physics, _LEFT_RENDER_SITE)
         configured_initial_ee_pos = np.asarray(
             self.config.initial_ee_pos,
             dtype=np.float64,
@@ -257,7 +315,7 @@ class AlohaCarrotMujocoSmoke:
             ee_tracking_errors.append(
                 float(
                     np.linalg.norm(
-                        self._site_xpos(physics, "left_cam_focus") - state.ee_pos
+                        self._site_xpos(physics, _LEFT_RENDER_SITE) - state.ee_pos
                     )
                 )
             )
@@ -594,7 +652,7 @@ class _LeftArmIk:
 
         self._physics = physics
         self._mujoco = mujoco
-        self._site_id = physics.model.name2id("left_cam_focus", "site")
+        self._site_id = physics.model.name2id(_LEFT_RENDER_SITE, "site")
         self._joint_ids = [
             physics.model.name2id(joint_name, "joint")
             for joint_name in _LEFT_JOINT_NAMES
@@ -770,6 +828,27 @@ def _patch_left_arm_xml(path: Path, config: AlohaCarrotLeftConfig) -> None:
                 "sensorsize",
             ):
                 camera.attrib.pop(attr, None)
+    for body in root.iter("body"):
+        if body.attrib.get("name") == "vx300s_left/gripper_link":
+            grasp_focus = ET.SubElement(
+                body,
+                "body",
+                {
+                    "name": "vx300s_left/grasp_focus",
+                    "pos": "0.0687 0 0",
+                },
+            )
+            ET.SubElement(
+                grasp_focus,
+                "site",
+                {
+                    "name": _LEFT_POLICY_GRASP_SITE,
+                    "pos": "0 0 0",
+                    "size": "0.004",
+                    "rgba": "0 0 1 0",
+                },
+            )
+            break
     for geom in root.iter("geom"):
         if geom.attrib.get("name", "").startswith("vx300s_left/"):
             geom.set("material", "arm_black")
