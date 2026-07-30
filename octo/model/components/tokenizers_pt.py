@@ -118,6 +118,7 @@ class ImageTokenizerPt(nn.Module, FromJaxModel):
         self.task_stack_keys = task_stack_keys
         self.task_film_keys = task_film_keys
         self.proper_pad_mask = proper_pad_mask
+        self._missing_task_keys_logged = set()
 
         
         self.encoder_def = ModuleSpec.instantiate(self.encoder)()
@@ -167,9 +168,11 @@ class ImageTokenizerPt(nn.Module, FromJaxModel):
             # if any task inputs are missing, replace with zero padding (TODO: be more flexible)
             for k in needed_task_keys:
                 if k not in tasks:
-                    logging.info(
-                        f"No task inputs matching {k} were found. Replacing with zero padding."
-                    )
+                    if k not in self._missing_task_keys_logged:
+                        logging.info(
+                            f"No task inputs matching {k} were found. Replacing with zero padding."
+                        )
+                        self._missing_task_keys_logged.add(k)
                     tasks[k] = torch.zeros_like(observations[k][:, 0])
             task_stack_keys = regex_filter(self.task_stack_keys, sorted(tasks.keys()))
             if len(task_stack_keys) == 0:
