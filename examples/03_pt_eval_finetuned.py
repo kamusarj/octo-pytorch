@@ -2,21 +2,14 @@
 This script demonstrates how to load and rollout a finetuned Octo model.
 We use the Octo model finetuned on ALOHA sim data from the examples/02_finetune_new_observation_action.py script.
 
-For installing the ALOHA sim environment, clone: https://github.com/tonyzhaozh/act
-Then run:
-pip3 install opencv-python modern_robotics pyrealsense2 h5py_cache pyquaternion pyyaml rospkg pexpect mujoco==2.3.3 dm_control==1.0.9 einops packaging h5py
-
-Finally, modify the `sys.path.append` statement below to add the ACT repo to your path.
-If you are running this on a head-less server, start a virtual display:
-    Xvfb :1 -screen 0 1024x768x16 &
-    export DISPLAY=:1
+The example environment is the dataset-aligned left-arm ALOHA carrot task
+registered by examples/envs/aloha_sim_env.py.
 
 To run this script, run:
     cd examples
     python3 03_eval_finetuned.py --finetuned_path=<path_to_finetuned_aloha_checkpoint>
 """
 from functools import partial
-import sys
 
 from absl import app, flags, logging
 import gym
@@ -26,9 +19,7 @@ import wandb
 
 import torch
 
-sys.path.append("path/to/your/act")
-
-# keep this to register ALOHA sim env
+# keep this to register ALOHA carrot sim env
 from envs.aloha_sim_env import AlohaGymEnv  # noqa
 
 from octo.model.octo_model_pt import OctoModelPt
@@ -67,7 +58,7 @@ def main(_):
     #     }
     #   }
     ##################################################################################################################
-    env = gym.make("aloha-sim-cube-v0")
+    env = gym.make("aloha-carrot-left-v0")
 
     # wrap env to normalize proprio
     env = NormalizeProprio(env, model.dataset_statistics)
