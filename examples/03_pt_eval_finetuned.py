@@ -7,12 +7,14 @@ registered by examples/envs/aloha_sim_env.py.
 
 To run this script, run:
     cd examples
-    python3 03_eval_finetuned.py --finetuned_path=<path_to_finetuned_aloha_checkpoint>
+    python3 03_pt_eval_finetuned.py --finetuned_path=<checkpoint_directory>
 """
 from functools import partial
+from pathlib import Path
 
 from absl import app, flags, logging
 import gym
+import imageio
 import numpy as np
 import wandb
 
@@ -37,6 +39,12 @@ flags.DEFINE_integer(
 )
 flags.DEFINE_integer("max_steps", 160, "Maximum environment steps per rollout.")
 flags.DEFINE_integer("num_rollouts", 3, "Number of evaluation rollouts.")
+flags.DEFINE_string(
+    "output_dir",
+    "outputs/eval/aloha_carrot_finetuned",
+    "Directory for local simulation rollout videos.",
+)
+flags.DEFINE_float("video_fps", 12.0, "Local rollout video frame rate.")
 
 
 def main(_):
@@ -46,7 +54,11 @@ def main(_):
         raise ValueError("--finetuned_path is required")
     if not 1 <= FLAGS.exec_horizon <= 20:
         raise ValueError("--exec_horizon must be between 1 and 20")
+    if FLAGS.video_fps <= 0:
+        raise ValueError("--video_fps must be positive")
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
+    output_dir = Path(FLAGS.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     # load finetuned model
     logging.info("Loading finetuned model...")
@@ -85,7 +97,7 @@ def main(_):
     )
 
     # running rollouts
-    for _ in range(FLAGS.num_rollouts):
+    for rollout_index in range(FLAGS.num_rollouts):
         obs, info = env.reset()
 
         # create task specification --> use model utility to create task dict with correct entries
@@ -93,7 +105,7 @@ def main(_):
         task = model.create_tasks(texts=language_instruction, device=device)
 
         # run rollout for 400 steps
-        images = [obs["image_primary"][0]]
+        images = [info["images"]]
         episode_return = 0.0
         while len(images) < FLAGS.max_steps:
             
@@ -107,11 +119,14 @@ def main(_):
             # step env -- info contains full "chunk" of observations for logging
             # obs only contains observation for final step of chunk
             obs, reward, done, trunc, info = env.step(actions)
-            images.extend([o["image_primary"][0] for o in info["observations"]])
+            images.extend(info["images"])
             episode_return += reward
             if done or trunc:
                 break
         print(f"Episode return: {episode_return}")
+        video_path = output_dir / f"rollout_{rollout_index:02d}.mp4"
+        imageio.mimsave(video_path, images, fps=FLAGS.video_fps)
+        logging.info("Saved rollout video to %s", video_path)
 
         # log rollout video to wandb -- subsample temporally 2x for faster logging
         wandb.log(
