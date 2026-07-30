@@ -519,10 +519,10 @@ class AlohaCarrotLeftSim:
                 and low_over_cup
             ):
                 object_phase = "in_cup"
-                carrot_pos = state.cup_pos + np.array([0.0, 0.0, 0.018])
+                carrot_pos = state.cup_pos + np.array([0.0, 0.0, -0.040])
 
         if object_phase == "in_cup":
-            carrot_pos = state.cup_pos + np.array([0.0, 0.0, 0.018])
+            carrot_pos = state.cup_pos + np.array([0.0, 0.0, -0.040])
 
         reward = self._reward(object_phase, ee_pos, carrot_pos)
         success = object_phase == "in_cup"

@@ -26,9 +26,10 @@ closely as current local evidence allows:
 - `octo/sim/aloha_carrot_left.py`: deterministic kinematic task state,
   renderer, controller, metrics.
 - `octo/sim/aloha_carrot_mujoco.py`: MuJoCo renderer with ACT left-arm meshes,
-  no right arm, deterministic wood texture, source-aligned table/mat/object
-  geometry, physically mounted wrist camera, continuous warm-start IK, and a
-  six-frame source timeline contact sheet.
+  no right arm, deterministic wood/backdrop textures, source-aligned
+  table/mat/object geometry and materials, physically mounted wrist camera,
+  continuous warm-start IK with a smooth transfer wrist target, and a six-frame
+  source timeline contact sheet.
 - `configs/sim/aloha_carrot_left.json`: fixed reset/camera/object contract.
 - `docs/sim/aloha_carrot_left.md`: canonical run/validation notes for the new
   left-arm carrot simulation.
@@ -125,14 +126,16 @@ closely as current local evidence allows:
   `0.0`, initial FK/config error `4.94e-9`, rollout success `true`, max reward
   `4.0`, final state `in_cup`, and 71 steps. Dynamic bounds passed with max
   end-effector tracking error `0.021038m`, max left-joint step `0.14rad`,
-  max wrist-camera rotation `7.51631deg/step`, and final frame-148 reference
+  max wrist-camera rotation `7.70071deg/step`, and final frame-148 reference
   joint error `0.0126rad`.
 - MuJoCo object stability passed with pre-grasp carrot translation std
-  `6.94e-17`, post-place translation std `2.78e-17`, and carrot quaternion
+  `6.94e-17`, post-place translation std `1.11e-16`, and carrot quaternion
   delta `0.0`.
 - MuJoCo source-aligned visual checks passed for all source/render files, reset
-  geometry, reset colors, and wrist timeline framing. The six-frame comparison
-  is
+  geometry, background colors, masked cup/plate/carrot colors, and wrist
+  timeline framing. Maximum reset object RGB channel deltas were `10.15` for
+  the cup, `14.47` for the plate, and `4.50` for the carrot. The six-frame
+  comparison is
   `outputs/validation/aloha_carrot_left_mujoco/mujoco_source_timeline_contact_sheet.png`.
 - Generated MuJoCo renders were visually inspected after calibration. The
   overhead view now matches the source table trapezoid, mat/object placement and

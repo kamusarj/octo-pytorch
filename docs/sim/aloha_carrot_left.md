@@ -75,7 +75,8 @@ warm-start IK, and checks:
 
 - FK reset against the configured initial end-effector position
 - six source-aligned overhead/wrist frames
-- reset object bbox/centroid and table/backdrop/mat RGB alignment
+- reset object bbox/centroid, table/backdrop/mat RGB alignment, and masked
+  cup/plate/carrot RGB alignment
 - wrist wide/close/transfer framing
 - end-effector tracking, joint-step, and wrist-camera rotation limits
 - pre-grasp/post-place object stability and zero carrot rotation

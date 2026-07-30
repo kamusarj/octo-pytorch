@@ -242,6 +242,7 @@ class AlohaCarrotMujocoSmoke:
                     state.ee_pos,
                     posture_target=_source_posture_target(state, self.config),
                     posture_weight=0.12 if state.success else 0.08,
+                    locked_qpos=_locked_joint_target(state, self.config),
                 )
             )
             self.apply_kinematic_state(
@@ -361,6 +362,7 @@ class AlohaCarrotMujocoSmoke:
                         else _source_posture_target(state, self.config)
                     ),
                     posture_weight=0.32 if source_posture is not None else 0.08,
+                    locked_qpos=_locked_joint_target(state, self.config),
                 )
             )
             self.apply_kinematic_state(
@@ -445,12 +447,15 @@ class AlohaCarrotMujocoSmoke:
             if src.is_file():
                 shutil.copy2(src, output_dir / src.name)
         _write_wood_texture(output_dir / "aloha_wood_texture.png", self.config.seed)
+        _write_cloth_texture(output_dir / "aloha_cloth_texture.png")
         _patch_left_arm_xml(output_dir / "vx300s_left.xml", self.config)
 
     def _build_xml(self) -> str:
         cfg = self.config
         mat_x, mat_y, mat_z = cfg.mat_center
         mat_w, mat_h = cfg.mat_size
+        mat_half_w, mat_half_h = mat_w / 2, mat_h / 2
+        border_width = 0.010
         cup_x, cup_y, cup_z = cfg.cup_pos
         plate_x, plate_y, plate_z = cfg.plate_pos
         carrot_x, carrot_y, carrot_z = cfg.carrot_pos
@@ -465,15 +470,20 @@ class AlohaCarrotMujocoSmoke:
   <asset>
     <texture name="green_sky" type="skybox" builtin="flat" rgb1="0.0 0.70 0.56" width="512" height="512"/>
     <texture name="wood_tex" type="2d" file="aloha_wood_texture.png"/>
+    <texture name="cloth_tex" type="2d" file="aloha_cloth_texture.png"/>
     <material name="wood" texture="wood_tex" texrepeat="1 1" texuniform="true" reflectance="0.03" shininess="0.08"/>
-    <material name="green_backdrop" rgba="0.0 0.70 0.56 1" reflectance="0.02"/>
+    <material name="green_backdrop" texture="cloth_tex" texrepeat="1 1" rgba="0.0 1.0 0.80 1" reflectance="0.02"/>
     <material name="pink_mat" rgba="1.0 0.70 0.85 0.78" reflectance="0.02"/>
-    <material name="cup_blue" rgba="0.24 0.90 1.0 1" emission="0.15" specular="0.45" shininess="0.55"/>
+    <material name="pink_border" rgba="1.0 0.45 0.70 0.55" reflectance="0.02"/>
+    <material name="cup_blue" rgba="0.25 0.82 1.0 1" emission="0.45" specular="0.45" shininess="0.55"/>
     <material name="cup_inner" rgba="0.06 0.40 0.57 1" specular="0.25" shininess="0.35"/>
-    <material name="plate_green" rgba="0.36 0.68 0.49 1" specular="0.28" shininess="0.40"/>
-    <material name="plate_rim" rgba="0.23 0.48 0.34 1" specular="0.22" shininess="0.32"/>
-    <material name="carrot_orange" rgba="0.96 0.38 0.07 1" specular="0.38" shininess="0.48"/>
-    <material name="leaf_green" rgba="0.16 0.43 0.17 1" specular="0.20" shininess="0.25"/>
+    <material name="cup_logo" rgba="0.78 0.94 1.0 1" specular="0.20" shininess="0.30"/>
+    <material name="cup_logo_dark" rgba="0.05 0.36 0.58 1" specular="0.20" shininess="0.30"/>
+    <material name="plate_green" rgba="0.68 0.98 0.88 1" emission="0.08" specular="0.28" shininess="0.40"/>
+    <material name="plate_rim" rgba="0.52 0.82 0.68 1" emission="0.08" specular="0.22" shininess="0.32"/>
+    <material name="carrot_orange" rgba="1.0 0.62 0.44 1" emission="0.12" specular="0.38" shininess="0.48"/>
+    <material name="carrot_seam" rgba="0.72 0.20 0.08 1" specular="0.32" shininess="0.40"/>
+    <material name="leaf_green" rgba="0.20 0.48 0.20 1" specular="0.20" shininess="0.25"/>
     <material name="arm_black" rgba="0.018 0.022 0.025 1" specular="0.55" shininess="0.72"/>
   </asset>
 
@@ -491,7 +501,11 @@ class AlohaCarrotMujocoSmoke:
       <geom name="table_top" type="box" size="0.57 0.60 0.018" pos="0 0 -0.018" material="wood" contype="1" conaffinity="1"/>
     </body>
     <geom name="green_back_wall" type="box" size="1.20 0.018 0.62" pos="0 0.87 0.54" material="green_backdrop" contype="0" conaffinity="0"/>
-    <geom name="mat" type="box" size="{mat_w / 2:.6f} {mat_h / 2:.6f} 0.002" pos="{mat_x:.6f} {mat_y:.6f} {mat_z:.6f}" material="pink_mat" contype="0" conaffinity="0"/>
+    <geom name="mat" type="box" size="{mat_half_w:.6f} {mat_half_h:.6f} 0.002" pos="{mat_x:.6f} {mat_y:.6f} {mat_z:.6f}" material="pink_mat" contype="0" conaffinity="0"/>
+    <geom name="mat_border_left" type="box" size="{border_width:.6f} {mat_half_h:.6f} 0.0015" pos="{mat_x - mat_half_w + border_width:.6f} {mat_y:.6f} {mat_z + 0.003:.6f}" material="pink_border" contype="0" conaffinity="0"/>
+    <geom name="mat_border_right" type="box" size="{border_width:.6f} {mat_half_h:.6f} 0.0015" pos="{mat_x + mat_half_w - border_width:.6f} {mat_y:.6f} {mat_z + 0.003:.6f}" material="pink_border" contype="0" conaffinity="0"/>
+    <geom name="mat_border_back" type="box" size="{mat_half_w:.6f} {border_width:.6f} 0.0015" pos="{mat_x:.6f} {mat_y + mat_half_h - border_width:.6f} {mat_z + 0.003:.6f}" material="pink_border" contype="0" conaffinity="0"/>
+    <geom name="mat_border_front" type="box" size="{mat_half_w:.6f} {border_width:.6f} 0.0015" pos="{mat_x:.6f} {mat_y - mat_half_h + border_width:.6f} {mat_z + 0.003:.6f}" material="pink_border" contype="0" conaffinity="0"/>
 
     <body name="primary_focus" pos="0.0 0.168 0.04">
       <site name="primary_focus_site" size="0.01" rgba="1 0 0 0"/>
@@ -506,16 +520,22 @@ class AlohaCarrotMujocoSmoke:
       <geom name="cup_handle_top" type="capsule" size="0.007" fromto="-0.047 0 0.029 -0.082 0 0.029" material="cup_blue" contype="0" conaffinity="0"/>
       <geom name="cup_handle_side" type="capsule" size="0.007" fromto="-0.082 0 0.029 -0.082 0 -0.029" material="cup_blue" contype="0" conaffinity="0"/>
       <geom name="cup_handle_bottom" type="capsule" size="0.007" fromto="-0.082 0 -0.029 -0.047 0 -0.029" material="cup_blue" contype="0" conaffinity="0"/>
+      <geom name="cup_logo" type="ellipsoid" size="0.021 0.0015 0.017" pos="0 -0.050 -0.005" material="cup_logo" contype="0" conaffinity="0"/>
+      <geom name="cup_logo_eye_left" type="sphere" size="0.0025" pos="-0.007 -0.052 0.000" material="cup_logo_dark" contype="0" conaffinity="0"/>
+      <geom name="cup_logo_eye_right" type="sphere" size="0.0025" pos="0.007 -0.052 0.000" material="cup_logo_dark" contype="0" conaffinity="0"/>
     </body>
     <body name="plate_body" pos="{plate_x:.6f} {plate_y:.6f} {plate_z:.6f}">
-      <geom name="plate_rim" type="cylinder" size="0.058 0.005" material="plate_rim" contype="1" conaffinity="1"/>
-      <geom name="plate" type="cylinder" size="0.050 0.004" pos="0 0 0.006" material="plate_green" contype="0" conaffinity="0"/>
+      <geom name="plate_rim" type="cylinder" size="0.064 0.005" material="plate_rim" contype="1" conaffinity="1"/>
+      <geom name="plate" type="cylinder" size="0.056 0.004" pos="0 0 0.006" material="plate_green" contype="0" conaffinity="0"/>
     </body>
     <body name="carrot_body" pos="{carrot_x:.6f} {carrot_y:.6f} {carrot_z:.6f}" quat="{carrot_quat}">
       <inertial pos="0 0 0" mass="0.05" diaginertia="0.0001 0.0001 0.0001"/>
       <joint name="carrot_joint" type="free"/>
-      <geom name="carrot" type="capsule" size="0.017 0.045" material="carrot_orange" contype="0" conaffinity="0"/>
-      <geom name="carrot_leaf" type="ellipsoid" size="0.016 0.022 0.009" pos="0 0 -0.050" material="leaf_green" contype="0" conaffinity="0"/>
+      <geom name="carrot" type="capsule" size="0.025 0.040" material="carrot_orange" contype="0" conaffinity="0"/>
+      <geom name="carrot_seam" type="cylinder" size="0.0258 0.0025" material="carrot_seam" contype="0" conaffinity="0"/>
+      <geom name="carrot_groove_left" type="cylinder" size="0.0255 0.0008" pos="0 0 -0.020" material="carrot_seam" contype="0" conaffinity="0"/>
+      <geom name="carrot_groove_right" type="cylinder" size="0.0255 0.0008" pos="0 0 0.020" material="carrot_seam" contype="0" conaffinity="0"/>
+      <geom name="carrot_leaf" type="ellipsoid" size="0.016 0.022 0.009" pos="0 0 -0.067" material="leaf_green" contype="0" conaffinity="0"/>
     </body>
   </worldbody>
 
@@ -605,20 +625,39 @@ class _LeftArmIk:
         damping: float = 0.030,
         posture_weight: float = 0.04,
         posture_target: Optional[Sequence[float]] = None,
+        locked_qpos: Optional[Sequence[float]] = None,
     ) -> np.ndarray:
         target = np.asarray(target, dtype=np.float64)
+        initial_qpos = self._qpos.copy()
         posture = (
             self._home_qpos
             if posture_target is None
             else np.asarray(posture_target, dtype=np.float64)
         )
+        require_posture_convergence = posture_target is not None
         if posture.shape != self._home_qpos.shape:
             raise ValueError(
                 f"Expected posture target shape {self._home_qpos.shape}, "
                 f"got {posture.shape}"
             )
-        initial_qpos = self._qpos.copy()
+        locked = np.full_like(initial_qpos, np.nan)
+        if locked_qpos is not None:
+            locked = np.asarray(locked_qpos, dtype=np.float64)
+        if locked.shape != self._home_qpos.shape:
+            raise ValueError(
+                f"Expected locked qpos shape {self._home_qpos.shape}, "
+                f"got {locked.shape}"
+            )
+        locked_mask = np.isfinite(locked)
+        free_mask = ~locked_mask
+        locked_values = np.clip(
+            locked,
+            initial_qpos - 0.08,
+            initial_qpos + 0.08,
+        )
+        locked_values = np.clip(locked_values, self._lower, self._upper)
         qpos = initial_qpos.copy()
+        qpos[locked_mask] = locked_values[locked_mask]
         for _ in range(max_iters):
             self._physics.data.qpos[self._qpos_addr] = qpos
             self._physics.forward()
@@ -628,8 +667,8 @@ class _LeftArmIk:
             )
             error = target - site_pos
             position_converged = np.linalg.norm(error) <= tolerance
-            posture_converged = (
-                posture_target is None or np.abs(posture - qpos).max() <= 0.02
+            posture_converged = not require_posture_convergence or bool(
+                np.abs(posture[free_mask] - qpos[free_mask]).max(initial=0.0) <= 0.02
             )
             if position_converged and posture_converged:
                 break
@@ -643,19 +682,24 @@ class _LeftArmIk:
                 jacr,
                 self._site_id,
             )
-            jac = jacp[:, self._dof_addr]
+            jac = jacp[:, self._dof_addr[free_mask]]
             lhs = jac @ jac.T + np.eye(3) * damping
             damped_pinv = jac.T @ np.linalg.solve(lhs, np.eye(3))
             delta = damped_pinv @ error
-            nullspace = np.eye(len(self._joint_ids)) - damped_pinv @ jac
-            delta += posture_weight * nullspace @ (posture - qpos)
-            qpos = np.clip(qpos + np.clip(delta, -0.08, 0.08), self._lower, self._upper)
+            nullspace = np.eye(int(free_mask.sum())) - damped_pinv @ jac
+            delta += posture_weight * nullspace @ (posture[free_mask] - qpos[free_mask])
+            qpos[free_mask] = np.clip(
+                qpos[free_mask] + np.clip(delta, -0.08, 0.08),
+                self._lower[free_mask],
+                self._upper[free_mask],
+            )
 
         qpos = np.clip(
             qpos,
             initial_qpos - 0.14,
             initial_qpos + 0.14,
         )
+        qpos[locked_mask] = locked_values[locked_mask]
         self._qpos = qpos
         return qpos.copy()
 
@@ -675,6 +719,24 @@ def _source_posture_target(
         key=lambda idx: float(np.linalg.norm(state.ee_pos - source_ee[idx])),
     )
     return np.asarray(config.source_qpos[reference_idx][:6], dtype=np.float64)
+
+
+def _locked_joint_target(
+    state: SceneState,
+    config: AlohaCarrotLeftConfig,
+) -> Optional[np.ndarray]:
+    if state.object_phase == "held" and state.carrot_pos[0] < 0.10:
+        wrist_rotate = -0.60
+    elif state.object_phase == "in_cup":
+        posture = _source_posture_target(state, config)
+        wrist_rotate = None if posture is None else float(posture[-1])
+    else:
+        wrist_rotate = None
+    if wrist_rotate is None:
+        return None
+    target = np.full(6, np.nan, dtype=np.float64)
+    target[-1] = wrist_rotate
+    return target
 
 
 def _set_joint_qpos(physics, joint_name: str, value: float) -> None:
@@ -755,6 +817,18 @@ def _write_wood_texture(path: Path, seed: int) -> None:
         texture += knot[..., None] * channel_scale
 
     Image.fromarray(np.clip(texture, 0, 255).astype(np.uint8), mode="RGB").save(path)
+
+
+def _write_cloth_texture(path: Path) -> None:
+    """Write broad deterministic folds resembling the green dataset backdrop."""
+
+    y, x = np.mgrid[:512, :512]
+    phase = x / 46.0 + 0.65 * np.sin(y / 105.0) + 0.22 * np.sin((x + y) / 37.0)
+    folds = 0.88 + 0.075 * np.sin(phase) + 0.035 * np.sin(x / 13.0 + y / 71.0)
+    folds -= 0.08 * np.exp(-(((x - 250.0) / 24.0) ** 2))
+    grayscale = np.clip(folds * 255.0, 0, 255).astype(np.uint8)
+    texture = np.repeat(grayscale[..., None], 3, axis=2)
+    Image.fromarray(texture, mode="RGB").save(path)
 
 
 def _write_source_timeline_contact_sheet(

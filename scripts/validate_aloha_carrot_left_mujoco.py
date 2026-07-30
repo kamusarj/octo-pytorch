@@ -35,6 +35,12 @@ COLOR_PROBES = (
     ("mat", (160, 210, 200, 300), 20.0),
 )
 
+OBJECT_COLOR_PROBES = (
+    ("cup", "cyan", (170, 170, 315, 320), 15.0),
+    ("plate", "plate_green", (315, 195, 450, 300), 30.0),
+    ("carrot", "orange", (315, 195, 450, 300), 15.0),
+)
+
 WRIST_PROBES = (
     {
         "camera": "wrist",
@@ -148,6 +154,7 @@ def build_visual_alignment_report(
             "missing_files": missing,
             "geometry": [],
             "colors": [],
+            "object_colors": [],
             "wrist": [],
             "passed": False,
         }
@@ -175,6 +182,17 @@ def build_visual_alignment_report(
             rendered_image=rendered_image,
         )
         for name, box, max_channel_delta in COLOR_PROBES
+    ]
+    object_color_reports = [
+        _masked_color_probe(
+            name,
+            kind,
+            box,
+            max_channel_delta=max_channel_delta,
+            source_image=source_image,
+            rendered_image=rendered_image,
+        )
+        for name, kind, box, max_channel_delta in OBJECT_COLOR_PROBES
     ]
 
     wrist_reports = []
@@ -207,6 +225,10 @@ def build_visual_alignment_report(
         "reset_colors_aligned": bool(
             color_reports and all(report["passed"] for report in color_reports)
         ),
+        "reset_object_colors_aligned": bool(
+            object_color_reports
+            and all(report["passed"] for report in object_color_reports)
+        ),
         "wrist_timeline_aligned": bool(
             wrist_reports and all(report["passed"] for report in wrist_reports)
         ),
@@ -216,6 +238,7 @@ def build_visual_alignment_report(
         "missing_files": sorted(set(missing)),
         "geometry": geometry_reports,
         "colors": color_reports,
+        "object_colors": object_color_reports,
         "wrist": wrist_reports,
         "checks": checks,
         "passed": all(checks.values()),
@@ -313,6 +336,57 @@ def _color_probe(
         "threshold": max_channel_delta,
         "passed": max_delta <= max_channel_delta,
     }
+
+
+def _masked_color_probe(
+    name: str,
+    kind: str,
+    box: Box,
+    *,
+    max_channel_delta: float,
+    source_image: np.ndarray,
+    rendered_image: np.ndarray,
+) -> Dict[str, object]:
+    source_mean = _masked_color_mean(source_image, kind=kind, box=box)
+    rendered_mean = _masked_color_mean(rendered_image, kind=kind, box=box)
+    max_delta = None
+    channel_delta = None
+    if source_mean is not None and rendered_mean is not None:
+        channel_delta = np.abs(source_mean - rendered_mean)
+        max_delta = float(channel_delta.max())
+    checks = {
+        "source_present": source_mean is not None,
+        "rendered_present": rendered_mean is not None,
+        "color_aligned": max_delta is not None and max_delta <= max_channel_delta,
+    }
+    return {
+        "name": name,
+        "kind": kind,
+        "box": list(box),
+        "source_rgb_mean": None if source_mean is None else source_mean.tolist(),
+        "rendered_rgb_mean": (
+            None if rendered_mean is None else rendered_mean.tolist()
+        ),
+        "channel_delta": None if channel_delta is None else channel_delta.tolist(),
+        "max_channel_delta": max_delta,
+        "threshold": max_channel_delta,
+        "checks": checks,
+        "passed": all(checks.values()),
+    }
+
+
+def _masked_color_mean(
+    image: np.ndarray,
+    *,
+    kind: str,
+    box: Box,
+) -> np.ndarray | None:
+    x1, y1, x2, y2 = box
+    roi = image[y1:y2, x1:x2]
+    mask = _color_mask(roi, kind)
+    if not bool(mask.any()):
+        return None
+    return roi[mask].astype(np.float64).mean(axis=0)
 
 
 def _roi_mean(image: np.ndarray, box: Box) -> np.ndarray:
