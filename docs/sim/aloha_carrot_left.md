@@ -11,12 +11,16 @@ It replaces the old external ACT cube runtime in this repository.
 - Gym ID: `aloha-carrot-left-v0`.
 - Cameras: `overhead_cam`, `wrist_cam_left`.
 - Observation images: `image_primary`, `image_wrist`.
-- Proprio: 8 left-arm values.
+- Proprio: 7 dataset values (`6 joint + 1 gripper`). MuJoCo's two finger slide
+  joints remain internal to the renderer.
 - Manual action: `[target_x, target_y, target_z, follower_gripper]`.
 - Default behavior: autonomous scripted controller.
-- Reset: fixed object positions and fixed initial arm pose.
+- Reset: fixed object positions and fixed initial arm pose. The configured
+  end-effector reset is the MuJoCo FK result of the fixed left-arm qpos.
 - Objects: kinematic carrot/cup/plate state with no pre-grasp or post-place
   jitter, roll, or spin.
+- Retreat: follows the episode-0 frame-120/frame-148 end-effector references
+  after placing the carrot.
 
 ## Run
 
@@ -39,6 +43,7 @@ Fast validation:
 ```bash
 python3 -m unittest tests.test_aloha_carrot_left_sim
 python3 scripts/audit_aloha_carrot_assets.py
+conda run -n octo_pt python scripts/validate_aloha_carrot_left_dataset.py
 python3 scripts/validate_aloha_carrot_left_alignment.py
 python3 scripts/validate_aloha_carrot_left_timeline.py
 python3 scripts/validate_aloha_carrot_left_visual_similarity.py
@@ -52,12 +57,36 @@ outputs/validation/aloha_carrot_asset_audit/report.json
 
 `current_validation_ready=true` means the available source frames and local ACT
 meshes are present. `full_dataset_policy_audit_ready=true` additionally requires
-the original parquet dataset and learned Octo/ACT checkpoints.
+the learned Octo/ACT checkpoints.
+
+The dataset validator checks all 130 parquet episodes, the 7D state/action
+contract, fixed reset and gripper constants, and verifies that the 12 source
+images are exact pixels from episode-0 frames `0,30,60,90,120,148`.
 
 MuJoCo validation, when `dm_control` is available:
 
 ```bash
 conda run -n octo_pt python scripts/validate_aloha_carrot_left_mujoco.py
+```
+
+This is the canonical 3D visual validation. It uses the local ALOHA mesh, omits
+the right arm and proximal meshes outside the dataset view, runs continuous
+warm-start IK, and checks:
+
+- FK reset against the configured initial end-effector position
+- six source-aligned overhead/wrist frames
+- reset object bbox/centroid and table/backdrop/mat RGB alignment
+- wrist wide/close/transfer framing
+- end-effector tracking, joint-step, and wrist-camera rotation limits
+- pre-grasp/post-place object stability and zero carrot rotation
+
+Generated MuJoCo evidence:
+
+```text
+outputs/validation/aloha_carrot_left_mujoco/mujoco_source_timeline_contact_sheet.png
+outputs/validation/aloha_carrot_left_mujoco/mujoco_primary_rollout.gif
+outputs/validation/aloha_carrot_left_mujoco/mujoco_wrist_rollout.gif
+outputs/validation/aloha_carrot_left_mujoco/report.json
 ```
 
 The timeline validator compares the six available source high/wrist frames with
@@ -105,7 +134,6 @@ Current validation evidence is tracked in:
 docs/plans/active/aloha-carrot-simulation-rebuild.md
 ```
 
-The current local workspace does not contain the original parquet dataset or
-trained checkpoint weights. Fidelity is therefore calibrated against the
-surviving source frames under
-`outputs/validation/aloha_carrot_sim_rebuild/source_ep0/`.
+The local parquet dataset is validated and used for reset/timeline calibration.
+Learned Octo and ACT checkpoint weights are not present, so autonomous execution
+uses the deterministic scripted controller rather than a learned-policy rollout.

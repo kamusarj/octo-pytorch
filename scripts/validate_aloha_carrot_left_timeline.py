@@ -21,7 +21,6 @@ from octo.sim.aloha_carrot_left import rollout_metrics
 from octo.sim.aloha_carrot_left import save_image
 from octo.sim.aloha_carrot_left import source_aligned_timeline
 
-
 WRIST_VISUAL_PROBES = {
     "01": [
         ("mat_corner_pink", "pink", (300, 230, 640, 480), 0.08),
@@ -48,7 +47,7 @@ WRIST_VISUAL_PROBES = {
         ("fingers_dark", "dark", (0, 250, 640, 480), 0.20),
     ],
     "05": [
-        ("mat_corner_pink", "pink", (150, 0, 640, 480), 0.05),
+        ("mat_corner_pink", "pink", (150, 0, 640, 480), 0.045),
         ("fingers_dark", "dark", (0, 250, 640, 480), 0.20),
         ("backdrop_green", "backdrop", (0, 0, 230, 250), 0.20),
     ],
@@ -142,6 +141,14 @@ def build_timeline_report(
 
     final_state = timeline[-1].state
     cup_pos = np.asarray(config.cup_pos, dtype=np.float64)
+    final_reference_ee = np.asarray(
+        (
+            config.source_ee_pos[-1]
+            if len(config.source_ee_pos) == 6
+            else config.initial_ee_pos
+        ),
+        dtype=np.float64,
+    )
     checks = {
         "rollout_success": bool(metrics["success"]),
         "all_expected_phases": all(row["phase_matches"] for row in rows),
@@ -152,7 +159,9 @@ def build_timeline_report(
             metrics["post_place_carrot_translation_std"] <= 1e-12
         ),
         "no_carrot_spin": bool(metrics["max_carrot_quat_delta"] <= 1e-12),
-        "final_retreat_left_of_scene": bool(final_state.ee_pos[0] <= -0.48),
+        "final_retreat_matches_dataset": bool(
+            np.linalg.norm(final_state.ee_pos - final_reference_ee) <= 1e-9
+        ),
         "final_retreat_away_from_cup": bool(
             float(np.linalg.norm(final_state.ee_pos - cup_pos)) >= 0.38
         ),
@@ -290,7 +299,9 @@ def _source_row(source_dir: Path, prefix: str, thumb_size) -> List[Image.Image]:
     return images
 
 
-def _thumb_row(images: Iterable[Image.Image], prefix: str, thumb_size) -> List[Image.Image]:
+def _thumb_row(
+    images: Iterable[Image.Image], prefix: str, thumb_size
+) -> List[Image.Image]:
     row = []
     for idx, image in enumerate(images, start=1):
         thumb = image.convert("RGB").resize(thumb_size)

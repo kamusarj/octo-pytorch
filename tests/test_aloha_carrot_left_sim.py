@@ -32,8 +32,14 @@ class AlohaCarrotLeftSimTest(unittest.TestCase):
     def test_config_matches_dataset_aloha_left_arm_contract(self):
         self.assertEqual(self.config.camera_names, ("overhead_cam", "wrist_cam_left"))
         self.assertFalse(self.config.use_right_arm)
-        self.assertEqual(len(self.config.left_home_qpos), 8)
-        self.assertEqual(tuple(self.config.initial_ee_pos), (-0.36, 0.255, 0.205))
+        self.assertEqual(len(self.config.left_home_qpos), 7)
+        self.assertEqual(self.config.source_frame_indices, (0, 30, 60, 90, 120, 148))
+        self.assertEqual(np.asarray(self.config.source_qpos).shape, (6, 7))
+        self.assertEqual(np.asarray(self.config.source_ee_pos).shape, (6, 3))
+        self.assertEqual(
+            tuple(self.config.initial_ee_pos),
+            (-0.14831511, 0.5290299, 0.22897997),
+        )
         self.assertEqual(tuple(self.config.cup_landmark_px), (245, 250))
         self.assertEqual(tuple(self.config.plate_landmark_px), (379, 251))
         self.assertEqual(tuple(self.config.carrot_landmark_px), (381, 245))
@@ -64,11 +70,11 @@ class AlohaCarrotLeftSimTest(unittest.TestCase):
         np.testing.assert_allclose(state_a.ee_pos, state_b.ee_pos)
         np.testing.assert_allclose(state_a.left_qpos, state_b.left_qpos)
         np.testing.assert_allclose(state_a.carrot_pos, state_b.carrot_pos)
-        self.assertEqual(state_a.left_qpos.shape, (8,))
+        self.assertEqual(state_a.left_qpos.shape, (7,))
         obs = sim_a.get_observation(render=False)
         self.assertTrue(obs["left_arm_only"])
         self.assertFalse(obs["right_arm_present"])
-        self.assertEqual(obs["qpos"].shape, (8,))
+        self.assertEqual(obs["qpos"].shape, (7,))
 
     def test_object_does_not_move_or_spin_before_grasp(self):
         sim = AlohaCarrotLeftSim(self.config)
@@ -94,7 +100,7 @@ class AlohaCarrotLeftSimTest(unittest.TestCase):
         self.assertEqual(metrics["max_reward"], 4.0)
         self.assertTrue(metrics["left_arm_only"])
         self.assertFalse(metrics["right_arm_present"])
-        self.assertEqual(metrics["left_qpos_shape"], [8])
+        self.assertEqual(metrics["left_qpos_shape"], [7])
         self.assertLessEqual(metrics["pre_grasp_carrot_translation_std"], 1e-12)
         self.assertLessEqual(metrics["pre_grasp_carrot_quat_std"], 1e-12)
         self.assertLessEqual(metrics["post_place_carrot_translation_std"], 1e-12)
@@ -107,19 +113,27 @@ class AlohaCarrotLeftSimTest(unittest.TestCase):
         states = sim.rollout_scripted(controller=DatasetAlignedController(self.config))
         timeline = source_aligned_timeline(states, self.config)
 
-        self.assertEqual([item.frame_name for item in timeline], [f"{i:02d}" for i in range(1, 7)])
+        self.assertEqual(
+            [item.frame_name for item in timeline], [f"{i:02d}" for i in range(1, 7)]
+        )
         self.assertEqual(
             [item.expected_phase for item in timeline],
             ["on_plate", "on_plate", "held", "held", "in_cup", "in_cup"],
         )
-        self.assertEqual([item.state.object_phase for item in timeline], [item.expected_phase for item in timeline])
+        self.assertEqual(
+            [item.state.object_phase for item in timeline],
+            [item.expected_phase for item in timeline],
+        )
         self.assertEqual(timeline[0].state_index, 0)
         self.assertEqual(timeline[-1].state_index, len(states) - 1)
         self.assertTrue(
             all(a.state_index <= b.state_index for a, b in zip(timeline, timeline[1:]))
         )
         np.testing.assert_allclose(timeline[1].state.carrot_pos, states[0].carrot_pos)
-        self.assertLessEqual(timeline[-1].state.ee_pos[0], -0.48)
+        np.testing.assert_allclose(
+            timeline[-1].state.ee_pos,
+            self.config.source_ee_pos[-1],
+        )
 
     def test_primary_and_wrist_render_shapes(self):
         sim = AlohaCarrotLeftSim(self.config)
@@ -136,7 +150,9 @@ class AlohaCarrotLeftSimTest(unittest.TestCase):
         self.assertLessEqual(report["landmark_errors_px"]["cup"], 38.0)
         self.assertLessEqual(report["landmark_errors_px"]["plate"], 30.0)
         self.assertLessEqual(report["landmark_errors_px"]["carrot"], 30.0)
-        self.assertTrue(all(item["passed"] for item in report["visual_probes"].values()))
+        self.assertTrue(
+            all(item["passed"] for item in report["visual_probes"].values())
+        )
 
     def test_timeline_report_passes_with_source_frames(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -159,7 +175,9 @@ class AlohaCarrotLeftSimTest(unittest.TestCase):
             self.assertTrue(
                 all(item["passed"] for item in report["wrist_visual_probes"])
             )
-            self.assertTrue((tmpdir / "timeline" / "timeline_contact_sheet.png").is_file())
+            self.assertTrue(
+                (tmpdir / "timeline" / "timeline_contact_sheet.png").is_file()
+            )
 
     def test_visual_similarity_report_passes_with_matched_source_frames(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -167,10 +185,18 @@ class AlohaCarrotLeftSimTest(unittest.TestCase):
             source_dir = tmpdir / "source"
             source_dir.mkdir()
             sim = AlohaCarrotLeftSim(self.config)
-            states = sim.rollout_scripted(controller=DatasetAlignedController(self.config))
+            states = sim.rollout_scripted(
+                controller=DatasetAlignedController(self.config)
+            )
             for item in source_aligned_timeline(states, self.config):
-                save_image(source_dir / f"high_{item.frame_name}.png", sim.render_primary(item.state))
-                save_image(source_dir / f"wrist_{item.frame_name}.png", sim.render_wrist(item.state))
+                save_image(
+                    source_dir / f"high_{item.frame_name}.png",
+                    sim.render_primary(item.state),
+                )
+                save_image(
+                    source_dir / f"wrist_{item.frame_name}.png",
+                    sim.render_wrist(item.state),
+                )
 
             report = build_visual_similarity_report(
                 self.config,
@@ -185,7 +211,9 @@ class AlohaCarrotLeftSimTest(unittest.TestCase):
                 report["summary"]["passed_probe_count"],
             )
             self.assertTrue(
-                (tmpdir / "visual_similarity" / "visual_similarity_contact_sheet.png").is_file()
+                (
+                    tmpdir / "visual_similarity" / "visual_similarity_contact_sheet.png"
+                ).is_file()
             )
 
     def test_asset_audit_distinguishes_current_and_full_validation_assets(self):
@@ -228,10 +256,14 @@ class AlohaCarrotLeftSimTest(unittest.TestCase):
                 report["missing_for_full_audit"],
             )
 
-            dataset_dir = repo_root / "data" / "aloha_carrot_easy" / "data" / "chunk-000"
+            dataset_dir = (
+                repo_root / "data" / "aloha_carrot_easy" / "data" / "chunk-000"
+            )
             dataset_dir.mkdir(parents=True)
             (dataset_dir / "episode_000.parquet").write_bytes(b"parquet")
-            octo_checkpoint = repo_root / "checkpoints" / "octo" / "full_seed42" / "49999"
+            octo_checkpoint = (
+                repo_root / "checkpoints" / "octo" / "full_seed42" / "49999"
+            )
             octo_checkpoint.mkdir(parents=True)
             for name in (
                 "weights.pth",
@@ -270,18 +302,57 @@ class AlohaCarrotLeftSimTest(unittest.TestCase):
             try:
                 smoke = runner.run(Path(tmpdir))
                 rollout = runner.run_scripted_rollout(Path(tmpdir), render_stride=8)
+                timeline = runner.render_source_timeline(Path(tmpdir))
+                from scripts.validate_aloha_carrot_left_mujoco import (
+                    build_visual_alignment_report,
+                )
+
+                visual_alignment = build_visual_alignment_report(
+                    self.config,
+                    output_dir=Path(tmpdir),
+                )
             except RuntimeError as exc:
                 self.skipTest(str(exc))
             self.assertEqual(smoke.primary_shape, (480, 640, 3))
             self.assertEqual(smoke.wrist_shape, (480, 640, 3))
             self.assertTrue(smoke.no_right_arm)
             self.assertLessEqual(smoke.static_object_delta, 1e-9)
+            self.assertLessEqual(smoke.initial_ee_error, 1e-6)
             self.assertTrue(rollout.no_right_arm)
             self.assertTrue(rollout.success)
             self.assertEqual(rollout.final_state, "in_cup")
             self.assertLessEqual(rollout.pre_grasp_carrot_translation_std, 1e-12)
             self.assertLessEqual(rollout.post_place_carrot_translation_std, 1e-12)
             self.assertLessEqual(rollout.max_carrot_quat_delta, 1e-12)
+            self.assertLessEqual(rollout.max_ee_tracking_error, 0.022)
+            self.assertLessEqual(rollout.max_left_joint_step, 0.20)
+            self.assertLessEqual(rollout.max_wrist_camera_rotation_step_deg, 8.0)
+            self.assertLessEqual(rollout.final_reference_joint_error, 0.08)
+            self.assertTrue(timeline.no_right_arm)
+            self.assertEqual(timeline.frame_names, ("01", "02", "03", "04", "05", "06"))
+            self.assertEqual(
+                timeline.object_phases,
+                ("on_plate", "on_plate", "held", "held", "in_cup", "in_cup"),
+            )
+            self.assertTrue(visual_alignment["passed"])
+
+    def test_dataset_contract_when_local_dataset_is_available(self):
+        try:
+            import pyarrow  # noqa: F401
+            from scripts.validate_aloha_carrot_left_dataset import (
+                build_dataset_alignment_report,
+            )
+        except ModuleNotFoundError as exc:
+            self.skipTest(f"Dataset validator dependency unavailable: {exc}")
+
+        dataset_root = Path("data/aloha_carrot_easy")
+        if not dataset_root.is_dir():
+            self.skipTest(f"Local dataset unavailable: {dataset_root}")
+        report = build_dataset_alignment_report(
+            self.config,
+            dataset_root=dataset_root,
+        )
+        self.assertTrue(report["passed"])
 
     def test_gym_env_uses_left_carrot_task_when_gym_available(self):
         try:
@@ -293,7 +364,7 @@ class AlohaCarrotLeftSimTest(unittest.TestCase):
         env = gym.make("aloha-carrot-left-v0")
         obs, info = env.reset()
         self.assertEqual(env.action_space.shape, (4,))
-        self.assertEqual(obs["proprio"].shape, (8,))
+        self.assertEqual(obs["proprio"].shape, (7,))
         self.assertEqual(obs["image_primary"].shape, (256, 256, 3))
         self.assertEqual(obs["image_wrist"].shape, (256, 256, 3))
         self.assertTrue(info["left_arm_only"])

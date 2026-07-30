@@ -25,7 +25,6 @@ from octo.sim.aloha_carrot_left import FOLLOWER_GRIPPER_CLOSE
 from octo.sim.aloha_carrot_left import FOLLOWER_GRIPPER_OPEN
 from octo.sim.aloha_carrot_left import LeftArmCommand
 
-
 _DEFAULT_IMAGE_KEYS = ("primary", "wrist")
 _CAMERA_TO_OBS_KEY = {
     "overhead_cam": "image_primary",
@@ -82,7 +81,7 @@ class AlohaGymEnv(gym.Env if gym is not None else object):
                 "proprio": gym.spaces.Box(
                     low=-np.inf,
                     high=np.inf,
-                    shape=(8,),
+                    shape=(7,),
                     dtype=np.float32,
                 ),
             }
@@ -190,7 +189,9 @@ def _resize_uint8(image: np.ndarray, size: int) -> np.ndarray:
 
 
 def _concat_images(images: Dict[str, np.ndarray]) -> np.ndarray:
-    ordered = [images[name] for name in ("overhead_cam", "wrist_cam_left") if name in images]
+    ordered = [
+        images[name] for name in ("overhead_cam", "wrist_cam_left") if name in images
+    ]
     return np.concatenate(ordered, axis=0)
 
 
