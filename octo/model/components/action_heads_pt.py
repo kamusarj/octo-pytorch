@@ -31,6 +31,7 @@ def continuous_loss(
     ground_truth_value: torch.tensor,
     mask: torch.tensor,
     loss_type: str = "mse",
+    weights: Optional[torch.tensor] = None,
 ) -> torch.tensor:
     """
     Args:
@@ -44,6 +45,9 @@ def continuous_loss(
         loss = torch.abs(pred_value - ground_truth_value)
     else:
         raise ValueError(f"Invalid loss type: {loss_type}")
+
+    if weights is not None:
+        mask = mask.float() * weights
 
     loss = masked_mean(loss, mask)
 
@@ -110,6 +114,7 @@ class ContinuousActionHeadPt(nn.Module, ActionHead, FromJaxModel):
         action_dim: int = 7,
         max_action: float = 5.0,
         loss_type: str = "mse",
+        horizon_loss_weights: Optional[list[float]] = None,
     ):
         super().__init__()
         self.readout_key = readout_key
@@ -119,6 +124,21 @@ class ContinuousActionHeadPt(nn.Module, ActionHead, FromJaxModel):
         self.max_action = max_action
         self.loss_type = loss_type
         self.input_dim = input_dim
+        if horizon_loss_weights is None:
+            self.register_buffer("horizon_loss_weights", None, persistent=False)
+        else:
+            weights = torch.as_tensor(horizon_loss_weights, dtype=torch.float32)
+            if weights.ndim != 1 or weights.numel() != self.action_horizon:
+                raise ValueError(
+                    "horizon_loss_weights must be a 1D list with length "
+                    f"action_horizon={self.action_horizon}"
+                )
+            if torch.any(weights < 0) or not torch.any(weights > 0):
+                raise ValueError(
+                    "horizon_loss_weights must be non-negative with a positive sum"
+                )
+            weights = weights / torch.clamp(weights.mean(), min=1e-8)
+            self.register_buffer("horizon_loss_weights", weights, persistent=False)
 
         if self.use_map:
             self.map_head = MAPHeadPt(self.input_dim)
@@ -183,8 +203,15 @@ class ContinuousActionHeadPt(nn.Module, ActionHead, FromJaxModel):
 
         # # combine the timestep pad mask with the action pad mask
         mask = timestep_pad_mask[:, :, None, None] & action_pad_mask
+        weights = None
+        if self.horizon_loss_weights is not None:
+            weights = self.horizon_loss_weights.to(
+                device=actions.device, dtype=actions.dtype
+            )[None, None, :, None]
 
-        loss, metrics = continuous_loss(mean, actions, mask, loss_type=self.loss_type)
+        loss, metrics = continuous_loss(
+            mean, actions, mask, loss_type=self.loss_type, weights=weights
+        )
         # # Sum over action dimension instead of averaging
         loss = loss * self.action_dim
         metrics["loss"] = metrics["loss"] * self.action_dim
@@ -214,6 +241,7 @@ class MSEActionHeadPt(ContinuousActionHeadPt):
         readout_key: str,
         action_horizon: int = 1,
         action_dim: int = 7,
+        horizon_loss_weights: Optional[list[float]] = None,
     ):
         super().__init__(
             input_dim=input_dim,
@@ -223,6 +251,7 @@ class MSEActionHeadPt(ContinuousActionHeadPt):
             action_dim=action_dim,
             max_action=5.0,
             loss_type="mse",
+            horizon_loss_weights=horizon_loss_weights,
         )
 
 
@@ -235,6 +264,7 @@ class L1ActionHeadPt(ContinuousActionHeadPt):
         action_horizon: int = 1,
         action_dim: int = 7,
         max_action=5.0,
+        horizon_loss_weights: Optional[list[float]] = None,
     ):
         super().__init__(
             input_dim=input_dim,
@@ -244,6 +274,7 @@ class L1ActionHeadPt(ContinuousActionHeadPt):
             action_dim=action_dim,
             max_action=max_action,
             loss_type="l1",
+            horizon_loss_weights=horizon_loss_weights,
         )
 
 

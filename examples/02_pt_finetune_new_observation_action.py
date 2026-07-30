@@ -10,12 +10,17 @@ python examples/02_pt_finetune_new_observation_action.py --pretrained_path=hf://
 import math
 import os
 from pathlib import Path
+import sys
 
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from absl import app, flags, logging
+import json
 import torch
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
@@ -26,6 +31,7 @@ import tqdm
 import wandb
 import numpy as np
 
+import aloha_carrot_easy_rlds  # noqa: F401 - registers local TFDS builder
 from octo.data.dataset import make_single_dataset
 from octo.model.components.action_heads_pt import L1ActionHeadPt
 from octo.model.components.tokenizers_pt import LowdimObsTokenizerPt
@@ -98,9 +104,19 @@ flags.DEFINE_string(
     "TFDS dataset name inside data_dir.",
 )
 flags.DEFINE_string(
+    "dataset_split",
+    "train",
+    "TFDS split expression. Use train to consume every ALOHA carrot episode.",
+)
+flags.DEFINE_string(
     "primary_image_key",
     "top",
     "Observation key used as Octo's primary RGB image.",
+)
+flags.DEFINE_string(
+    "wrist_image_key",
+    None,
+    "Optional observation key used as Octo's wrist RGB image.",
 )
 flags.DEFINE_string(
     "dataset_statistics",
@@ -117,19 +133,15 @@ flags.DEFINE_integer(
     64,
     "Frame shuffle buffer; each item contains decoded image history, so keep this small on low-RAM machines.",
 )
-flags.DEFINE_integer(
-    "action_horizon", 50, "Number of future actions per training window."
-)
+flags.DEFINE_integer("action_horizon", 20, "Number of future actions per training window.")
 flags.DEFINE_string(
     "horizon_loss_weights",
     None,
     "Optional comma-separated non-negative loss weights, one per action horizon.",
 )
-flags.DEFINE_integer(
-    "window_size", 2, "Number of observation history frames per training window."
-)
-flags.DEFINE_integer("num_steps", 5000, "Number of optimizer steps to run.")
-flags.DEFINE_integer("save_interval", 1000, "Checkpoint save interval in steps.")
+flags.DEFINE_integer("window_size", 1, "Number of observation history frames per training window.")
+flags.DEFINE_integer("num_steps", 60000, "Final optimizer step to train to.")
+flags.DEFINE_integer("save_interval", 10000, "Checkpoint save interval in steps.")
 flags.DEFINE_float("learning_rate", 3e-5, "AdamW learning rate.")
 flags.DEFINE_integer("warmup_steps", 200, "Linear learning-rate warmup steps.")
 flags.DEFINE_float(
@@ -161,6 +173,13 @@ flags.DEFINE_integer(
     "resume_step", None, "Checkpoint step to resume, or latest when omitted."
 )
 flags.DEFINE_integer("batch_size", 1, "Batch size for finetuning.")
+flags.DEFINE_string("run_name", "aloha_carrot_finetune", "Local/W&B run name.")
+flags.DEFINE_enum(
+    "wandb_mode",
+    "disabled",
+    ["disabled", "offline", "online"],
+    "W&B mode. Default disabled to avoid network/quota usage.",
+)
 
 flags.DEFINE_bool(
     "freeze_transformer",
@@ -181,7 +200,7 @@ def _freeze_patterns(policy: str) -> list[str]:
     """Return patterns against actual PyTorch names, not stale JAX class names."""
     language = ["*hf_model*", "*language_tokenizer*", "*language_projection*"]
     transformer = ["*octo_transformer*"]
-    vision = ["*observation_tokenizers.primary*"]
+    vision = ["*observation_tokenizers.primary*", "*observation_tokenizers.wrist*"]
     if policy == "stage_a":
         return language + transformer + vision
     if policy == "stage_b":
@@ -200,6 +219,25 @@ def _freeze_patterns(policy: str) -> list[str]:
     if policy == "legacy":
         return []
     raise ValueError(f"unknown freeze policy: {policy}")
+
+
+def _canonicalize_language_pad_mask(batch: dict) -> None:
+    mask = batch["task"]["pad_mask_dict"]["language_instruction"]
+    if mask.ndim == 2 and mask.shape[1] == 1:
+        batch["task"]["pad_mask_dict"]["language_instruction"] = mask[:, 0]
+    elif mask.ndim != 1:
+        raise ValueError(
+            "Unexpected language pad mask shape: "
+            f"{tuple(mask.shape)}; expected [B] or [B,1]"
+        )
+
+
+def _flag_dict() -> dict:
+    return {
+        name: getattr(FLAGS, name)
+        for name in FLAGS
+        if name not in ("help", "helpshort", "helpfull") and not name.startswith("?")
+    }
 
 
 def main(_):
@@ -241,7 +279,7 @@ def main(_):
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(FLAGS.seed)
     # setup wandb for logging
-    wandb.init(name="finetune_aloha_pt", project="octo")
+    wandb.init(name=FLAGS.run_name, project="octo", mode=FLAGS.wandb_mode)
 
     logging.info("Loading pre-trained model...")
     logging.set_verbosity(logging.INFO)
@@ -259,10 +297,16 @@ def main(_):
     # delete goal images in the data loader since we will train a language-conditioned-only policy
 
     logging.info("Loading finetuning dataset...")
+    image_obs_keys = {"primary": FLAGS.primary_image_key}
+    resize_size = {"primary": (256, 256)}
+    if FLAGS.wrist_image_key:
+        image_obs_keys["wrist"] = FLAGS.wrist_image_key
+        resize_size["wrist"] = (128, 128)
     dataset_kwargs = dict(
         name=FLAGS.dataset_name,
         data_dir=FLAGS.data_dir,
-        image_obs_keys={"primary": FLAGS.primary_image_key},
+        split=FLAGS.dataset_split,
+        image_obs_keys=image_obs_keys,
         proprio_obs_key=FLAGS.proprio_key,
         language_key=FLAGS.language_key,
         num_parallel_reads=1,
@@ -279,7 +323,7 @@ def main(_):
             num_parallel_calls=1,
         ),
         frame_transform_kwargs=dict(
-            resize_size={"primary": (256, 256)},
+            resize_size=resize_size,
             num_parallel_calls=1,
         ),
         train=True,
@@ -312,7 +356,8 @@ def main(_):
     # modify config --> remove wrist cam, add proprio input, change action head
     # following Zhao et al. we use "action chunks" of length 50 and L1 loss for ALOHA
 
-    del meta["config"]["model"]["observation_tokenizers"]["wrist"]
+    if not FLAGS.wrist_image_key:
+        meta["config"]["model"]["observation_tokenizers"].pop("wrist", None)
     ###
     meta["config"]["model"]["observation_tokenizers"]["proprio"] = ModuleSpec.create(
         LowdimObsTokenizerPt,
@@ -324,12 +369,15 @@ def main(_):
     )
 
     # LowdimObsTokenizer emits one token per proprio dimension.
-    meta["config"]["model"]["num_tokens_dict"] = {
-        "primary": 256,
-        "language": 16,
-        "proprio": proprio_dim,
-        "action": 1,
-    }
+    num_tokens_dict = dict(meta["config"]["model"].get("num_tokens_dict", {}))
+    num_tokens_dict.update(
+        {"primary": 256, "language": 16, "proprio": proprio_dim, "action": 1}
+    )
+    if FLAGS.wrist_image_key:
+        num_tokens_dict.setdefault("wrist", 64)
+    else:
+        num_tokens_dict.pop("wrist", None)
+    meta["config"]["model"]["num_tokens_dict"] = num_tokens_dict
 
     # Fully override the old action head with a new one (for smaller changes, you can use update_config)
     meta["config"]["model"]["heads"]["action"] = ModuleSpec.create(
@@ -370,9 +418,9 @@ def main(_):
             weights_only=True,
         )
         model.load_state_dict(resume_payload["state_dict"])
-        start_step = resume_step + 1
+        start_step = resume_step
         logging.info(
-            "Resuming checkpoint %s at optimizer step %d", resume_dir, start_step
+            "Resuming checkpoint %s after optimizer step %d", resume_dir, start_step
         )
     else:
         _, _ = model.load_weights_from_jax(
@@ -407,6 +455,7 @@ def main(_):
             "*readout*": new_lr,
             "*octo_transformer*": backbone_lr,
             "*observation_tokenizers.primary*": backbone_lr,
+            "*observation_tokenizers.wrist*": backbone_lr,
         }
     if group_lrs:
         optimizer_params = parameter_groups_pt(
@@ -440,6 +489,11 @@ def main(_):
     scheduler = LambdaLR(optimizer, lr_lambda=lr_factor, last_epoch=start_step - 1)
 
     metrics_dir = Path(FLAGS.metrics_dir or FLAGS.save_dir or "outputs/training")
+    save_dir = Path(FLAGS.save_dir or "checkpoints/octo/finetune")
+    save_dir.mkdir(parents=True, exist_ok=True)
+    metrics_dir.mkdir(parents=True, exist_ok=True)
+    with (metrics_dir / "resolved_finetune_flags.json").open("w") as f:
+        json.dump(_flag_dict(), f, indent=2, default=str)
     metrics = TrainingMetricsRecorder(
         metrics_dir,
         action_dim=active_action_dim,
@@ -447,9 +501,7 @@ def main(_):
         append=start_step > 0,
     )
 
-    example_batch["task"]["pad_mask_dict"]["language_instruction"] = example_batch[
-        "task"
-    ]["pad_mask_dict"]["language_instruction"][:, 0]
+    _canonicalize_language_pad_mask(example_batch)
 
     # run finetuning loop
     logging.info("Starting finetuning...")
@@ -458,10 +510,11 @@ def main(_):
     dataloader_iter = iter(dataloader)
     if start_step >= FLAGS.num_steps:
         raise ValueError(
-            f"resume step {start_step - 1} already reaches num_steps={FLAGS.num_steps}"
+            f"resume step {start_step} already reaches num_steps={FLAGS.num_steps}"
         )
     for i in tqdm.trange(start_step, FLAGS.num_steps, dynamic_ncols=True):
         last_step = i
+        global_step = i + 1
         optimizer.zero_grad(set_to_none=True)
         accumulated_loss = 0.0
         accumulated_mse = 0.0
@@ -469,9 +522,7 @@ def main(_):
 
         for _ in range(FLAGS.gradient_accumulation_steps):
             batch = next(dataloader_iter)
-            batch["task"]["pad_mask_dict"]["language_instruction"] = batch["task"][
-                "pad_mask_dict"
-            ]["language_instruction"][:, 0]
+            _canonicalize_language_pad_mask(batch)
             batch = _to_device(batch, device=device)
 
             _, head_outputs = model(
@@ -510,7 +561,7 @@ def main(_):
         scheduler.step()
 
         metric_row = metrics.record(
-            step=i,
+            step=global_step,
             train_loss=train_loss,
             mse=mse,
             learning_rate=learning_rate,
@@ -518,10 +569,10 @@ def main(_):
             active_action_dims=batch_active_action_dims,
         )
 
-        if (i + 1) % FLAGS.log_interval == 0 or i == 0:
+        if global_step % FLAGS.log_interval == 0 or i == start_step:
             logging.info(
                 "Step %d; Loss: %.4f; MAE/dim: %.4f; Cur LR = [%.3e]",
-                i,
+                global_step,
                 train_loss,
                 metric_row["mae_per_dim"],
                 learning_rate,
@@ -536,22 +587,23 @@ def main(_):
                     "learning_rate": learning_rate,
                     "gradient_norm": gradient_norm,
                 },
-                step=i,
+                step=global_step,
             )
 
-        if (i + 1) % FLAGS.plot_interval == 0:
+        if global_step % FLAGS.plot_interval == 0:
             metrics.plot()
 
-        if (i + 1) % FLAGS.save_interval == 0:
+        if global_step % FLAGS.save_interval == 0:
             # save checkpoint
             model.save_pretrained(
-                step=i, checkpoint_path=FLAGS.save_dir, optimizer=optimizer
+                step=global_step, checkpoint_path=save_dir, optimizer=optimizer
             )
 
-    if last_step >= 0 and (last_step + 1) % FLAGS.save_interval != 0:
+    final_step = last_step + 1
+    if last_step >= 0 and final_step % FLAGS.save_interval != 0:
         model.save_pretrained(
-            step=last_step,
-            checkpoint_path=FLAGS.save_dir,
+            step=final_step,
+            checkpoint_path=save_dir,
             optimizer=optimizer,
         )
 
@@ -559,7 +611,7 @@ def main(_):
         plot_path = metrics.plot()
         logging.info("Training metrics CSV: %s", metrics.csv_path)
         logging.info("Loss curve PNG: %s", plot_path)
-        wandb.log({"loss_curve": wandb.Image(str(plot_path))}, step=last_step)
+        wandb.log({"loss_curve": wandb.Image(str(plot_path))}, step=final_step)
     metrics.close()
     wandb.finish()
 
