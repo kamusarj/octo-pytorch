@@ -141,10 +141,19 @@ def _np2pt(data, device=None, dtype=None):
     if isinstance(data, dict):
         return {key: _np2pt(val, device) for key, val in data.items()}
     elif isinstance(data, np.ndarray):
+        # Checkpoint statistics may also carry provenance metadata such as a
+        # dataset fingerprint.  Those values are intentionally not tensors,
+        # and attempting ``torch.tensor(np.array("..."))`` raises TypeError.
+        # Preserve all non-numeric arrays while continuing to tensorize the
+        # numeric action/proprio statistics used by the model.
+        if data.dtype.kind in {"O", "S", "U"}:
+            return data
         if len(data.shape) == 4 and data.dtype == np.uint8:
             data = data.transpose((0, 3, 1, 2)) #NHWC -> NCHW
         elif len(data.shape) == 5 and data.dtype == np.uint8:
             data = data.transpose((0, 1, 4, 2, 3)) #NTHWC -> NTCHW
+    elif isinstance(data, (str, bytes)):
+        return data
     t = torch.tensor(data, device=device, dtype=dtype)
     return t
 
