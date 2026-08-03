@@ -2,11 +2,14 @@
 set -euo pipefail
 
 PYTHON_BIN="${PYTHON_BIN:-/home/linh/anaconda3/envs/octo_pt/bin/python}"
-OUTPUT_ROOT="${OUTPUT_ROOT:-outputs/eval/open_loop_two_models_20260801}"
+OUTPUT_ROOT="${OUTPUT_ROOT:-outputs/eval/open_loop_two_models_original_data}"
 SPLITS="${SPLITS:-train,validation}"
 TRAJ_IDS="${TRAJ_IDS:-0}"
 STEPS="${STEPS:-200}"
 DEVICE="${DEVICE:-cuda:0}"
+DATA_DIR="${DATA_DIR:-outputs/derived/aloha_carrot_easy_rlds}"
+DATASET_NAME="${DATASET_NAME:-aloha_carrot_easy_rlds}"
+EXECUTION_HORIZON="${EXECUTION_HORIZON:-8}"
 
 export JAX_PLATFORMS=cpu
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
@@ -24,8 +27,10 @@ run_open_loop() {
     --splits "${SPLITS}" \
     --traj-ids "${TRAJ_IDS}" \
     --steps "${STEPS}" \
-    --execution-horizon 0 \
+    --execution-horizon "${EXECUTION_HORIZON}" \
     --device "${DEVICE}" \
+    --data-dir "${DATA_DIR}" \
+    --dataset-name "${DATASET_NAME}" \
     --output-dir "${OUTPUT_ROOT}/${output_name}"
 }
 
