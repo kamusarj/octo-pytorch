@@ -99,6 +99,27 @@ number of steps to the trajectory length.
 | robust step 2525 | train | 0.154744 | 0.065366 |
 | robust step 2525 | validation | 0.210640 | 0.150732 |
 
+### 4.5 GT-vs-Prediction Plots
+
+Black lines show ground-truth actions, blue lines show predicted actions, gray
+lines show the reference state, and vertical red lines mark inference points.
+
+**Checkpoint at step 20000 — train trajectory 0**
+
+![Checkpoint at step 20000, train trajectory 0: ground-truth actions versus predicted actions](assets/open_loop/step20000_train_gt_vs_pred.png)
+
+**Checkpoint at step 20000 — validation trajectory 0**
+
+![Checkpoint at step 20000, validation trajectory 0: ground-truth actions versus predicted actions](assets/open_loop/step20000_validation_gt_vs_pred.png)
+
+**Robust checkpoint at step 2525 — train trajectory 0**
+
+![Robust checkpoint at step 2525, train trajectory 0: ground-truth actions versus predicted actions](assets/open_loop/robust_step2525_train_gt_vs_pred.png)
+
+**Robust checkpoint at step 2525 — validation trajectory 0**
+
+![Robust checkpoint at step 2525, validation trajectory 0: ground-truth actions versus predicted actions](assets/open_loop/robust_step2525_validation_gt_vs_pred.png)
+
 ## 5. Interpretation
 
 ### Checkpoint at Step 20000
@@ -157,9 +178,11 @@ outputs/eval/open_loop_two_models_20260801/
     └── validation/trajectory_000_actions.npz
 ```
 
-Artifacts under `outputs/` are ignored by Git. This report records all required
-metrics, while the JSON, CSV, plot, and NumPy trace files remain available
-locally for auditing.
+The complete artifacts under `outputs/` are ignored by Git. This report records
+all required metrics, while the JSON, CSV, and NumPy trace files remain
+available locally for auditing. The four GT-vs-prediction plots in section 4.5
+are stored under `docs/assets/open_loop/` and committed to Git so that they are
+displayed directly on GitHub.
 
 ## 7. Reproduction
 

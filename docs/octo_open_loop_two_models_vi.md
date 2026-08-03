@@ -95,6 +95,28 @@ Mỗi model được đánh giá trên trajectory index `0` của hai split:
 | robust step 2525 | train | 0.154744 | 0.065366 |
 | robust step 2525 | validation | 0.210640 | 0.150732 |
 
+### 4.5 Biểu đồ GT-vs-prediction
+
+Các đường màu đen là ground-truth action, các đường màu xanh là action dự
+đoán, đường màu xám là state tham chiếu và các vạch đỏ dọc đánh dấu thời điểm
+inference.
+
+**Checkpoint step 20000 — train trajectory 0**
+
+![Checkpoint step 20000, train trajectory 0: ground-truth action so với predicted action](assets/open_loop/step20000_train_gt_vs_pred.png)
+
+**Checkpoint step 20000 — validation trajectory 0**
+
+![Checkpoint step 20000, validation trajectory 0: ground-truth action so với predicted action](assets/open_loop/step20000_validation_gt_vs_pred.png)
+
+**Checkpoint robust step 2525 — train trajectory 0**
+
+![Checkpoint robust step 2525, train trajectory 0: ground-truth action so với predicted action](assets/open_loop/robust_step2525_train_gt_vs_pred.png)
+
+**Checkpoint robust step 2525 — validation trajectory 0**
+
+![Checkpoint robust step 2525, validation trajectory 0: ground-truth action so với predicted action](assets/open_loop/robust_step2525_validation_gt_vs_pred.png)
+
 ## 5. Diễn giải
 
 ### Checkpoint step 20000
@@ -149,8 +171,10 @@ outputs/eval/open_loop_two_models_20260801/
     └── validation/trajectory_000_actions.npz
 ```
 
-Các artifact trong `outputs/` bị Git ignore; báo cáo này ghi lại toàn bộ metric
-cần thiết còn JSON, CSV, plot và NumPy trace được giữ local để audit.
+Các artifact đầy đủ trong `outputs/` bị Git ignore; báo cáo này ghi lại toàn bộ
+metric cần thiết, còn JSON, CSV và NumPy trace được giữ local để audit. Bốn plot
+GT-vs-prediction ở mục 4.5 được lưu trong `docs/assets/open_loop/` và commit vào
+Git để hiển thị trực tiếp trên GitHub.
 
 ## 7. Cách tái chạy
 
