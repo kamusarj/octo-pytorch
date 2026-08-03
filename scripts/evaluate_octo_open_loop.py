@@ -295,15 +295,62 @@ def _plot_trajectory(
         target_values = np.where(valid[:, dim], target[:, dim], np.nan)
         predicted_values = np.where(valid[:, dim], predicted[:, dim], np.nan)
         if state is not None and state.shape == target.shape:
-            ax.plot(timesteps, state[:, dim], color="0.65", linewidth=1, label="state")
-        ax.plot(timesteps, target_values, color="black", linewidth=1.5, label="GT action")
-        ax.plot(timesteps, predicted_values, color="#1f77b4", linewidth=1.3, label="pred action")
+            ax.plot(
+                timesteps,
+                state[:, dim],
+                color="#666666",
+                linestyle="--",
+                linewidth=1.3,
+                alpha=0.8,
+                label="state",
+                zorder=1,
+            )
+        ax.plot(
+            timesteps,
+            target_values,
+            color="#0072B2",
+            linewidth=2.1,
+            label="GT action",
+            zorder=3,
+        )
+        ax.plot(
+            timesteps,
+            predicted_values,
+            color="#D55E00",
+            linewidth=1.9,
+            label="pred action",
+            zorder=2,
+        )
         for point in inference_points:
-            ax.axvline(point, color="#d62728", alpha=0.16, linewidth=0.8)
+            ax.axvline(
+                point,
+                color="#CC79A7",
+                linestyle=":",
+                alpha=0.35,
+                linewidth=1.0,
+                zorder=0,
+            )
+        visible_inference_points = [
+            point
+            for point in inference_points
+            if 0 <= point < len(predicted_values)
+            and np.isfinite(predicted_values[point])
+        ]
+        if visible_inference_points:
+            ax.scatter(
+                visible_inference_points,
+                predicted_values[visible_inference_points],
+                color="#CC79A7",
+                edgecolors="white",
+                linewidths=0.5,
+                s=24,
+                label="inference point",
+                zorder=4,
+            )
         ax.set_ylabel(names[dim])
-        ax.grid(True, alpha=0.2)
+        ax.grid(True, color="#D0D0D0", alpha=0.45, linewidth=0.7)
         if dim == 0:
-            ax.legend(loc="upper right", ncol=3)
+            ax.legend(loc="upper right", ncol=4, framealpha=0.95)
     axes[-1].set_xlabel("dataset timestep")
     fig.suptitle(title)
     fig.tight_layout(rect=(0, 0, 1, 0.98))

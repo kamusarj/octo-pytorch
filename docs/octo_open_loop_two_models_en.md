@@ -101,8 +101,11 @@ number of steps to the trajectory length.
 
 ### 4.5 GT-vs-Prediction Plots
 
-Black lines show ground-truth actions, blue lines show predicted actions, gray
-lines show the reference state, and vertical red lines mark inference points.
+Blue lines show ground-truth actions, orange lines show predicted actions, and
+dashed gray lines show the reference state. Purple circles and vertical dotted
+lines mark inference points. In addition to the high-contrast palette, distinct
+line styles and markers keep the plots legible in grayscale and for readers
+with color-vision deficiencies.
 
 **Checkpoint at step 20000 — train trajectory 0**
 

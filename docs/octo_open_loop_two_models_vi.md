@@ -97,9 +97,11 @@ Mỗi model được đánh giá trên trajectory index `0` của hai split:
 
 ### 4.5 Biểu đồ GT-vs-prediction
 
-Các đường màu đen là ground-truth action, các đường màu xanh là action dự
-đoán, đường màu xám là state tham chiếu và các vạch đỏ dọc đánh dấu thời điểm
-inference.
+Các đường màu xanh dương là ground-truth action, các đường màu cam là action dự
+đoán và đường màu xám nét đứt là state tham chiếu. Chấm tròn cùng vạch dọc màu
+tím đánh dấu thời điểm inference. Ngoài màu sắc tương phản, kiểu nét và marker
+khác nhau giúp biểu đồ vẫn dễ đọc khi in thang xám hoặc với người bị rối loạn
+sắc giác.
 
 **Checkpoint step 20000 — train trajectory 0**
 
