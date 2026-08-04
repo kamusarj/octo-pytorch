@@ -42,7 +42,7 @@ run_open_loop \
 
 run_open_loop \
   checkpoints/octo/one_episode_ep0_jitter1cm_command_v4_adapt \
-  2525 \
-  one_episode_ep0_jitter1cm_command_v4_step2525
+  4500 \
+  one_episode_ep0_real_ep0_step4500
 
 echo "[open-loop] results=${OUTPUT_ROOT}"
